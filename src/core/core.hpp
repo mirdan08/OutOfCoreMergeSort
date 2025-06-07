@@ -1,7 +1,8 @@
 #include <cstdint>
+#include<fstream>
 
 #ifndef RPAYLOAD_MAX
-#define RPAYLOAD_MAX 128
+#define RPAYLOAD_MAX 10
 #endif
 
 //max payload size
@@ -11,7 +12,7 @@ const unsigned long MAX_MEMORY_LIMIT=32*1024*1024;
 //a single record struct
 struct Record {
     uint32_t len; 
-    unsigned long key; 
+    uint64_t key; 
     char payload[PAYLOAD_MAX];
 };
 //create randomly initialized records
@@ -22,8 +23,8 @@ Record* initialize_random_record(
 
 //used to sort the values within a single node
 struct PosKeyPair{
-    unsigned long key; 
-    unsigned long pos; 
+    uint64_t key; 
+    uint64_t pos; 
 };
 
 Record* read_record(std::ifstream& in_file);

@@ -1,29 +1,29 @@
-CXX        = g++ -std=c++20
-MPICXX     = mpicxx -std=c++20
+CXX        = g++
+MPICXX     = mpicxx 
 
-INCLUDES   = -Iinclude/fastflow/ -Isrc/ff_singlenode/ -Isrc/openmp_singlenode/ -Isrc/multinode/
-CXXFLAGS  += -Wall 
-LDFLAGS    = -pthread -fopenmp -Wall -Wextra
+CXXFLAGS= -std=c++20
+
+INCLUDES   = -Iinclude/fastflow/ -Isrc/
+LDFLAGS    = -pthread -Wall -Wextra
 OPTFLAGS   = -O3 -ffast-math -DNDEBUG
 
 RPAYLOAD ?= 32
 
 # Targets
-TARGETS    = mergeSortPar mergeSortSeq mergeSortDist sortSeq
+TARGETS    = ms_sequential ff_singlenode openmp_singlenode mpi_multinode
 
 # Sources
-COMMON_SRC = mergesort.cpp
-SORT_SRC   = sortSeq.cpp
-SEQ_SRC    = mergeSortSeq.cpp
+CORE_SRC   = src/core/core.cpp
+SEQ_SRC    = src/sequential/ms_sequential.cpp
+UTILS_SRC    = src/utils/utils.cpp
+
 PAR_SRC    = mergeSortPar.cpp
 MPI_SRC    = mergeSortDist.cpp
 
 # Object files
-COMMON_OBJ = $(COMMON_SRC:.cpp=.o)
-SEQ_OBJ    = $(SEQ_SRC:.cpp=.o)
-PAR_OBJ    = $(PAR_SRC:.cpp=.o)
-SORT_OBJ   = $(SORT_SRC:.cpp=.o)
-MPI_OBJ   = $(MPI_SRC:.cpp=.o)
+CORE_OBJ = $(CORE_SRC:.cpp=.o)
+UTILS_OBJ = $(UTILS_SRC:.cpp=.o)
+SEQ_OBJ = $(SEQ_SRC:.cpp=.o)
 
 .PHONY: all clean cleanall
 .SUFFIXES: .cpp
@@ -31,8 +31,9 @@ MPI_OBJ   = $(MPI_SRC:.cpp=.o)
 # Rules
 all: $(TARGETS)
 
-sortSeq: $(SORT_OBJ) $(COMMON_OBJ)
-	$(CXX) $(CXXFLAGS) -DRPAYLOAD=$(RPAYLOAD) $(INCLUDES) $(OPTFLAGS) -o $@ $^ $(LDFLAGS)
+ms_sequential: $(SEQ_OBJ) $(CORE_OBJ) $(UTILS_OBJ)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $(OPTFLAGS) -o $@ $^ $(LDFLAGS)
+
 
 mergeSortSeq: $(SEQ_OBJ) $(COMMON_OBJ)
 	$(CXX) $(CXXFLAGS) -DRPAYLOAD=$(RPAYLOAD) $(INCLUDES) $(OPTFLAGS) -o $@ $^ $(LDFLAGS)
@@ -52,4 +53,4 @@ clean:
 	rm -f $(TARGETS)
 
 cleanall: clean
-	rm -f *.o *~
+	find . -name '*.o' -delete

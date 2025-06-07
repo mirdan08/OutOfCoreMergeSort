@@ -1,9 +1,9 @@
 #include "core.hpp"
-#include<iostream>
-#include<random>
-#include<memory>
-#include<fstream>
-#include<cstring>
+#include <iostream>
+#include <random>
+#include <memory>
+#include <fstream>
+#include <cstring>
 
 Record* initialize_random_record(
     const unsigned long max_payload_size,

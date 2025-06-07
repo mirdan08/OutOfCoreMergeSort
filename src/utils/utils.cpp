@@ -1,4 +1,4 @@
-#include"utils.hpp"
+#include<utils/utils.hpp>
 
 bool parse_cli_args(int argc,char*argv[],size_t& records_num,size_t& threads_num,bool& verbose){
     int opt;
