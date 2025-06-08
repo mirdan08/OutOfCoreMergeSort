@@ -33,7 +33,8 @@ all: $(TARGETS)
 
 ms_sequential: $(SEQ_OBJ) $(CORE_OBJ) $(UTILS_OBJ)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(OPTFLAGS) -o $@ $^ $(LDFLAGS)
-
+payload_generator:payload_generator.cpp 
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $(OPTFLAGS) -o $@ $^ $(LDFLAGS)
 
 mergeSortSeq: $(SEQ_OBJ) $(COMMON_OBJ)
 	$(CXX) $(CXXFLAGS) -DRPAYLOAD=$(RPAYLOAD) $(INCLUDES) $(OPTFLAGS) -o $@ $^ $(LDFLAGS)
