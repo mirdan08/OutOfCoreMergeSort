@@ -25,7 +25,7 @@ Record* initialize_random_record(
 Record* read_record(std::ifstream& in_file){
     auto r=std::make_unique<Record>();
     in_file.read(reinterpret_cast<char*>(&(r->len)),sizeof(uint32_t));
-    char buffer[PAYLOAD_MAX+sizeof(unsigned long)];
+    char buffer[payload_max+sizeof(unsigned long)];
     in_file.read(buffer,r->len+sizeof(unsigned long));
     std::memcpy(&r->key,buffer,sizeof(unsigned long));
     std::memcpy(&r->key,buffer+sizeof(unsigned long),static_cast<unsigned int>(r->len));

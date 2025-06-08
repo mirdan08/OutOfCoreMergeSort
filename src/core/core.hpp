@@ -2,24 +2,26 @@
 #include<fstream>
 
 #ifndef RPAYLOAD_MAX
-#define RPAYLOAD_MAX 10
+#define RPAYLOAD_MAX 100
+#endif
+
+#ifndef RMAX_MEMORY_LIMIT
+#define RMAX_MEMORY_LIMIT 32*1024*1024
 #endif
 
 //max payload size
-const unsigned long PAYLOAD_MAX= RPAYLOAD_MAX;
+const unsigned long payload_max= RPAYLOAD_MAX;
+
 //max memory limit for single node
-const unsigned long MAX_MEMORY_LIMIT=32*1024*1024;
+const unsigned long MAX_MEMORY_LIMIT=RMAX_MEMORY_LIMIT;
 //a single record struct
 struct Record {
     uint32_t len; 
     uint64_t key; 
-    char payload[PAYLOAD_MAX];
+    char payload[payload_max];
 };
 //create randomly initialized records
-Record* initialize_random_record(
-    const unsigned long max_payload_size,
-    unsigned int seed
-);
+Record* initialize_random_record(const unsigned long max_payload_size,unsigned int seed);
 
 //used to sort the values within a single node
 struct PosKeyPair{
