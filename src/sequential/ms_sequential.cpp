@@ -13,22 +13,24 @@ int main(int argc,char*argv[]){
     uint64_t records_num=0;
     size_t threads_num=0;
     bool verbose = false;
-    bool success=parse_cli_args(argc,argv,records_num,threads_num,verbose);
-
+    std::string filename="";
+    bool success=parse_cli_args(argc,argv,threads_num,verbose,filename);
     if(!success){
-        std::cout << "error: wrong arguments.\nExiting..." << std::endl;
+        std::cout << "Exiting..." << std::endl;
         return 1;
     }
-
+    if(filename==""){
+        std::cout << "please specify filename" << std::endl;
+    }
     auto start_time = std::chrono::high_resolution_clock::now();
     
-    std::ifstream in_file("input.pms",std::ifstream::binary | std::ios::ate);
+    std::ifstream in_file(filename,std::ifstream::binary | std::ios::ate);
     std::streamsize file_size= in_file.tellg();
     in_file.seekg(0);
     uint64_t max_file_payload_size;
     in_file.read(reinterpret_cast<char*>(&max_file_payload_size),sizeof(uint64_t));    
-    if(max_file_payload_size != PAYLOAD_MAX){
-        std::cout<< "error:the maximum payload size should correspond to " << PAYLOAD_MAX << " but it isn't.\nExiting..." << std::endl;
+    if(max_file_payload_size != payload_max){
+        std::cout<< "error:the maximum payload size should correspond to " << payload_max << " but it isn't.\nExiting..." << std::endl;
         in_file.close();
         return 1;
     }
@@ -42,11 +44,10 @@ int main(int argc,char*argv[]){
               << "\tmax payload size:\t" << max_file_payload_size << std::endl;
 
     const unsigned int header_offset=in_file.tellg();
-
     unsigned long records_count=0;
     size_t current_size=0;
     std::vector<PosKeyPair> pos_key_data;
-    const unsigned int max_record_size=PAYLOAD_MAX+sizeof(uint32_t)+sizeof(uint64_t);
+    const unsigned int max_record_size=payload_max+sizeof(uint32_t)+sizeof(uint64_t);
     const unsigned int buffer_size= std::min(MAX_MEMORY_LIMIT,max_record_size*records_num);
     char* buffer=new char[buffer_size];
     const unsigned int payload_header_size=sizeof(uint32_t)+sizeof(uint64_t);
@@ -61,7 +62,7 @@ int main(int argc,char*argv[]){
         unsigned int buffer_length=std::min(buffer_size,(uint)file_size-(uint)(file_header_size) -buffer_start);
         in_file.seekg(file_header_size+offset_header_size+buffer_offset);
         in_file.read(buffer,buffer_length);
-        
+
         //Note: header is not read in the buffer
         //If the offset exceed the payload header size stop
         while( record_offset + payload_header_size< buffer_length && records_count < records_num){
