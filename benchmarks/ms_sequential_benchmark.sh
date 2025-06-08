@@ -2,7 +2,7 @@
 
 trials=5
 # 128b 1Gb 2Gb
-n_records=($((128)) $((1*1024*1024)))
+n_records=($((128)) $((1*1024*1024)) )
 # 64b 1Kb 1Mb
 max_payloads=($((1024)) $((1024*1024)) )
 
@@ -26,6 +26,7 @@ echo "starting experiments:"
 
 output_file="$1"
 touch "$output_file"
+echo "" > "$output_file"
 echo "iteration,max_payload_size,records_number,time(ms)" >> "$output_file"
 
 for i in $(seq 1 $trials); do
