@@ -7,10 +7,10 @@ INCLUDES   = -Iinclude/fastflow/ -Isrc/
 LDFLAGS    = -pthread -Wall -Wextra
 OPTFLAGS   = -O3 -ffast-math -DNDEBUG
 
-RPAYLOAD ?= 32
+RPAYLOAD_MAX = 32
 
 # Targets
-TARGETS    = ms_sequential ff_singlenode openmp_singlenode mpi_multinode
+TARGETS    = ms_sequential ff_singlenode openmp_singlenode mpi_multinode payload_generator
 
 # Sources
 CORE_SRC   = src/core/core.cpp
@@ -32,24 +32,13 @@ SEQ_OBJ = $(SEQ_SRC:.cpp=.o)
 all: $(TARGETS)
 
 ms_sequential: $(SEQ_OBJ) $(CORE_OBJ) $(UTILS_OBJ)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $(OPTFLAGS) -o $@ $^ $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) -DRPAYLOAD_MAX=$(RPAYLOAD_MAX) $(INCLUDES) $(OPTFLAGS) -o $@ $^ $(LDFLAGS)
 
-payload_generator:payload_generator.cpp 
+payload_generator:utilities/payload_generator.cpp 
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(OPTFLAGS) -o utilities/$@ $^ $(LDFLAGS)
 
-mergeSortSeq: $(SEQ_OBJ) $(COMMON_OBJ)
-	$(CXX) $(CXXFLAGS) -DRPAYLOAD=$(RPAYLOAD) $(INCLUDES) $(OPTFLAGS) -o $@ $^ $(LDFLAGS)
-
-mergeSortPar: $(PAR_OBJ) $(COMMON_OBJ)
-	$(CXX) $(CXXFLAGS) -DRPAYLOAD=$(RPAYLOAD) $(INCLUDES) $(OPTFLAGS) -o $@ $^ $(LDFLAGS)
-
-mergeSortDist: $(MPI_OBJ) $(COMMON_OBJ)
-	$(MPICXX) $(CXXFLAGS) -DRPAYLOAD=$(RPAYLOAD) $(INCLUDES) $(OPTFLAGS) -o $@ $^ $(LDFLAGS) -lmpi
-
 %.o: %.cpp
-	$(CXX) $(CXXFLAGS) -DRPAYLOAD=$(RPAYLOAD) $(INCLUDES) $(OPTFLAGS) -c $< -o $@
-mergeSortDist.o: mergeSortDist.cpp
-	$(MPICXX) $(CXXFLAGS) -DRPAYLOAD=$(RPAYLOAD) $(INCLUDES) $(OPTFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) -DRPAYLOAD_MAX=$(RPAYLOAD_MAX)  $(INCLUDES) $(OPTFLAGS) -c $< -o $@
 
 clean:
 	rm -f $(TARGETS)
