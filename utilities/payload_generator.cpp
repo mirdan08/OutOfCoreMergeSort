@@ -60,6 +60,7 @@ int main(int argc,char*argv[]) {
         std::cerr << "records count must be >0.\n";
         return 1;
     }
+    std::cout << "beggining to write '" << out_path << "' with " << records_count << " records and max payload "<< payload_max <<"."<< std::endl;
     // Write PAYLOAD_MAX
     out_file.write(reinterpret_cast<const char*>(&payload_max), sizeof(uint64_t));
 
@@ -105,6 +106,6 @@ int main(int argc,char*argv[]) {
     out_file.write(reinterpret_cast<const char*>(actual_offsets.data()), sizeof(uint64_t) * records_count);
 
     out_file.close();
-    std::cout << "File '" << out_path << "' written with " << records_count << " records.\n";
+    std::cout << "File '" << out_path << "' written with " << records_count << " records and max payload "<< payload_max <<"."<< std::endl;
     return 0;
 }

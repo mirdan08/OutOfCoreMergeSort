@@ -21,6 +21,7 @@ int main(int argc,char*argv[]){
     }
     if(filename==""){
         std::cout << "please specify filename" << std::endl;
+        return 1;
     }
     auto start_time = std::chrono::high_resolution_clock::now();
     
