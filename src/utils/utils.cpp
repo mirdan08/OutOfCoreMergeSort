@@ -1,14 +1,10 @@
 #include<utils/utils.hpp>
+#include<string>
 
-bool parse_cli_args(int argc,char*argv[],size_t& records_num,size_t& threads_num,bool& verbose){
+bool parse_cli_args(int argc,char*argv[],size_t& threads_num,bool& verbose,std::string& filename){
     int opt;
-    while ((opt = getopt(argc, argv, "s:r:t:v:l:")) != -1) {
-
+    while ((opt = getopt(argc, argv, "t:v:i:")) != -1) {
         switch (opt) {
-            case 's': {
-                records_num = std::stoull(optarg);
-                break;
-            }
             case 't': {
                 threads_num = std::stoi(optarg);
                 break;
@@ -16,6 +12,10 @@ bool parse_cli_args(int argc,char*argv[],size_t& records_num,size_t& threads_num
             case 'v':{
                 int v = std::stoi(optarg);
                 verbose= (v>0?true:false);
+                break;
+            }
+            case 'i':{
+                filename = optarg;
                 break;
             }
             default:{
