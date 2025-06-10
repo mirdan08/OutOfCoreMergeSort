@@ -15,13 +15,11 @@ TARGETS    = ms_sequential ff_singlenode openmp_singlenode mpi_multinode payload
 # Sources
 CORE_SRC   = src/core/core.cpp
 SEQ_SRC    = src/sequential/ms_sequential.cpp
+FF_SRC 	   = src/ff_singlenode/ms_ff_singlenode.cpp
 UTILS_SRC    = src/utils/utils.cpp
-
-PAR_SRC    = mergeSortPar.cpp
-MPI_SRC    = mergeSortDist.cpp
-
 # Object files
 CORE_OBJ = $(CORE_SRC:.cpp=.o)
+FF_OBJ = $(FF_SRC:.cpp=.o)
 UTILS_OBJ = $(UTILS_SRC:.cpp=.o)
 SEQ_OBJ = $(SEQ_SRC:.cpp=.o)
 
@@ -32,6 +30,8 @@ SEQ_OBJ = $(SEQ_SRC:.cpp=.o)
 all: $(TARGETS)
 
 ms_sequential: $(SEQ_OBJ) $(CORE_OBJ) $(UTILS_OBJ)
+	$(CXX) $(CXXFLAGS) -DRPAYLOAD_MAX=$(RPAYLOAD_MAX) $(INCLUDES) $(OPTFLAGS) -o $@ $^ $(LDFLAGS)
+ff_singlenode: $(FF_OBJ) $(CORE_OBJ) $(UTILS_OBJ)
 	$(CXX) $(CXXFLAGS) -DRPAYLOAD_MAX=$(RPAYLOAD_MAX) $(INCLUDES) $(OPTFLAGS) -o $@ $^ $(LDFLAGS)
 
 payload_generator:utilities/payload_generator.cpp 
