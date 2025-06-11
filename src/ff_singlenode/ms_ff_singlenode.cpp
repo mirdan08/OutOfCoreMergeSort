@@ -63,8 +63,8 @@ uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair>& ranges, 
     std::vector<std::pair<size_t, size_t>> bounds(p);
 
     for (int i = 0; i < p; ++i) {
-        bounds[i].first = ranges[i].first;          // l[i]
-        bounds[i].second = ranges[i].second - 1;    // r[i]
+        bounds[i].first = ranges[i].first;
+        bounds[i].second = ranges[i].second - 1;
     }
 
     while (true) {
@@ -191,8 +191,11 @@ struct SelectWorker : ff::ff_node_t<int,uint64_t> {
 struct SelectCollector : ff::ff_node_t<uint64_t,void> {
     size_t p;
     std::vector<uint64_t> pivots;
+    PosKeyVec& data;
+    std::vector<IndexPair>& ranges;
 
-    SelectCollector(size_t p) : p(p) {
+
+    SelectCollector(size_t p,PosKeyVec& data,std::vector<IndexPair>& ranges) : p(p),data(data),ranges(ranges) {
         pivots.reserve(p - 1);
     }
 
@@ -203,13 +206,142 @@ struct SelectCollector : ff::ff_node_t<uint64_t,void> {
 
         if (pivots.size() == p - 1) {
             std::sort(pivots.begin(), pivots.end());
-            std::cout << "Selected Pivots:\n";
+            std::cout << "Selected Pivots:\t";
             for (auto val : pivots) std::cout << val << " ";
             std::cout << "\n";
-        }
 
+            std::vector<std::vector<IndexPair>*> bucket_subranges(p);
+            for (size_t i = 0; i < p; ++i) {
+                bucket_subranges[i] = new std::vector<IndexPair>();
+            }
+            std::cout << "done making buckets" << std::endl;
+
+            for (const auto& [start_idx, end_idx] : ranges) {
+                std::cout<< "starting on idxs " << start_idx << ":" << end_idx << std::endl;
+                auto begin_it = data.begin() + start_idx;
+                auto end_it = data.begin() + end_idx;
+
+                size_t last_idx = start_idx;
+
+                for (size_t b = 0; b < p; ++b) {
+                    auto low = data.begin() + last_idx;
+
+                    auto high = (b < pivots.size())
+                        ? std::upper_bound(low, end_it, pivots[b],
+                            [](uint64_t val, const PosKeyPair& elem) {
+                                return val < elem.key;
+                            })
+                        : end_it;
+
+                    if (low < high) {
+                        bucket_subranges[b]->emplace_back(low - data.begin(), high - data.begin());
+                    }
+
+                    last_idx = high - data.begin();
+                    if (last_idx >= end_idx) break;
+                }
+
+            }
+
+            for (size_t b = 0; b < p; ++b) {
+                ff_send_out(bucket_subranges[b]); // Each is vector<IndexPair>*
+            }
+            return EOS;
+            std::cout << "collector done" << std::endl;
+        }
         return GO_ON;
     }
+};
+std::vector<PosKeyPair> k_way_merge_from_ranges(
+    const PosKeyVec& data,
+    const std::vector<IndexPair>& subranges
+) {
+    size_t k = subranges.size();
+    std::vector<size_t> positions(k);
+    for (size_t i = 0; i < k; ++i) {
+        positions[i] = subranges[i].first;
+    }
+
+    std::vector<PosKeyPair> merged;
+    std::vector<size_t> min_positions(subranges.size(),0);
+
+    while (true) {
+        int min_idx = -1;
+        uint64_t min_key = UINT64_MAX;
+
+        for (size_t i = 0; i < k; ++i) {
+            size_t pos = positions[i];
+            if (pos < subranges[i].second) {
+                uint64_t key = data[pos].key;
+                if (key < min_key) {
+                    min_key = key;
+                    min_idx = i;
+                }
+            }
+        }
+
+        if (min_idx == -1)
+            break;  // All subranges are exhausted
+
+        merged.push_back(data[positions[min_idx]]);
+        positions[min_idx]++;
+    }
+    return merged;
+}
+struct SubMergeWorker : ff::ff_node_t<
+std::vector<std::pair<unsigned long,unsigned long>>,
+PosKeyVec
+>{
+
+    PosKeyVec& data;
+    SubMergeWorker(PosKeyVec& data):data(data){}
+    
+    PosKeyVec* svc(std::vector<std::pair<unsigned long,unsigned long>>* task) {
+        auto* subranges = static_cast<std::vector<IndexPair>*>(task);
+        auto merged = new PosKeyVec(k_way_merge_from_ranges(data, *subranges));
+        delete subranges;
+    
+        // Process or store `merged` as needed
+        return merged;
+    }
+    
+};
+struct SubRangeCollector : ff::ff_node_t<
+PosKeyVec,
+int
+>{
+
+    PosKeyVec& data;
+    std::vector<PosKeyVec*> sub_ranges;
+    int range_counter=0;
+    int num_workers;
+    SubRangeCollector(int num_workers,PosKeyVec& data):num_workers(num_workers),data(data){};
+    int* svc(PosKeyVec* task) {
+        auto* merged_result = static_cast<PosKeyVec*>(task);
+        if(range_counter<num_workers-1){
+            sub_ranges.push_back(merged_result);
+            range_counter++;
+        }
+        else{
+            int i=0;
+            std::sort(
+                sub_ranges.begin(),sub_ranges.end(),
+                [](PosKeyVec* a,PosKeyVec* b){
+                    if(a->size()==0 || b->size()==0) return true;
+                    return  a->at(0).key<b->at(0).key;
+                }
+            );
+            for(const auto& range:sub_ranges){
+                for(const auto& pkp:(*range)){
+                    std::cout << i++ << "|" << pkp.pos << ":" << pkp.key<< std::endl;
+                }
+            }
+            return EOS;
+        }
+        // Process or store `merged` as needed
+        return GO_ON;
+    }
+    
 };
 
 // ---- SelectEmitter: emits k values for pivot search ----
@@ -257,14 +389,22 @@ void sort_with_ff(PosKeyVec& data,size_t sorting_workers,size_t num_workers){
         rank_workers.push_back(new SelectWorker(data,sorted_ranges));
     }
     ranking_farm.add_workers(rank_workers);
-    SelectCollector sc(num_workers);
+    SelectCollector sc(num_workers,data,sorted_ranges);
     ranking_farm.add_collector(&sc);
 
-    ff::ff_pipeline pipeline;
+    ff::ff_farm subranges_sorting_farm;
+    std::vector<ff::ff_node*> subrange_workers;
+    for (int i=0;i<sorting_workers;i++){
+        subrange_workers.push_back(new SubMergeWorker(data));
+    }
+    subranges_sorting_farm.add_workers(subrange_workers);
+    SubRangeCollector src(num_workers,data);
+    subranges_sorting_farm.add_collector(&src);
 
+    ff::ff_pipeline pipeline;
     pipeline.add_stage(&sorting_farm);
     pipeline.add_stage(&ranking_farm);
-
+    pipeline.add_stage(&subranges_sorting_farm);
     if(pipeline.run_and_wait_end()<0)
         std::cerr << "errors with the pipeline" << std::endl;
 
