@@ -18,33 +18,36 @@ using SortResult=std::tuple<unsigned long,unsigned long,unsigned long>;
 
 
 //initial sorter for mergesort
-struct SortingEmitter: public ff::ff_monode_t<int,IndexPair>{
-    SortingEmitter(size_t stream_size,size_t workers_num)
-        :stream_size(stream_size)
-        ,workers_num(workers_num){};
-    IndexPair* svc(int* in){
-        size_t chunk_start=-1;
-        size_t chunk_end=-1;
-        size_t chunk_size=(stream_size/workers_num);
-        for(int i=0;i<workers_num;i++){
-            chunk_start=i*chunk_size;
-            chunk_end= chunk_start + std::min(chunk_size,stream_size-chunk_start);
-            IndexPair* res=new IndexPair(chunk_start,chunk_end);     
+struct SortingEmitter : public ff::ff_monode_t<int, IndexPair> {
+    SortingEmitter(size_t stream_size, size_t workers_num)
+        : stream_size(stream_size), workers_num(workers_num) {}
+
+    IndexPair* svc(int* in) {
+        size_t chunk_base = stream_size / workers_num;
+        size_t remainder = stream_size % workers_num;
+
+        size_t start = 0;
+        for (size_t i = 0; i < workers_num; ++i) {
+            size_t chunk_size = chunk_base + (i < remainder ? 1 : 0);
+            size_t end = start + chunk_size;
+            IndexPair* res = new IndexPair(start, end);
             ff_send_out(res);
+            start = end;
         }
         return EOS;
     }
-    private:
-        size_t stream_size;
-        size_t workers_num;
+private:
+    size_t stream_size;
+    size_t workers_num;
 };
+
 //initial sorter for mergesort
 struct SortingWorker: public ff::ff_monode_t<IndexPair,IndexPair>{
     SortingWorker(PosKeyVec& data):data(data){};
     IndexPair* svc(IndexPair* in){
         std::sort(
                     data.begin()+in->first,data.begin()+in->second,
-                    [](const PosKeyPair& a,const PosKeyPair& b){return a.key<b.key;}
+                    [](const PosKeyPair& a,const PosKeyPair& b){return a.key<=b.key;}
                 );
         IndexPair* res=new IndexPair(in->first,in->second);        
         ff_send_out(res);
@@ -168,14 +171,17 @@ struct SelectWorker : ff::ff_node_t<int,uint64_t> {
 };
 
 // ---- SelectCollector: gathers pivots and reports them ----
-struct SelectCollector : ff::ff_node_t<uint64_t,void> {
+struct SelectCollector : ff::ff_minode_t<uint64_t,void> {
     size_t p;
     std::vector<uint64_t> pivots;
     PosKeyVec& data;
     std::vector<IndexPair>& ranges;
 
 
-    SelectCollector(size_t p,PosKeyVec& data,std::vector<IndexPair>& ranges) : p(p),data(data),ranges(ranges) {
+    SelectCollector(size_t p,PosKeyVec& data,std::vector<IndexPair>& ranges): 
+         p(p),
+         data(data),
+         ranges(ranges){
         pivots.reserve(p - 1);
     }
 
@@ -282,29 +288,28 @@ struct SubRangeCollector : ff::ff_minode_t<
 PosKeyVec,
 int
 >{
-
     PosKeyVec& data;
     std::vector<PosKeyVec*> sub_ranges;
+    PosKeyVec& result;
     int range_counter=0;
     int num_workers;
-    SubRangeCollector(int num_workers,PosKeyVec& data):num_workers(num_workers),data(data){};
+    SubRangeCollector(int num_workers,PosKeyVec& data,PosKeyVec& result):num_workers(num_workers),data(data),result(result){};
     int* svc(PosKeyVec* task) {
         auto* merged_result = static_cast<PosKeyVec*>(task);
-        sub_ranges.push_back(merged_result);
+        if(!merged_result->empty()){
+            sub_ranges.push_back(merged_result);
+        }
         range_counter++;
         if(range_counter==num_workers){
-            int i=0;
             std::sort(
                 sub_ranges.begin(),sub_ranges.end(),
                 [](PosKeyVec* a,PosKeyVec* b){
-                    if(a->size()==0 || b->size()==0) return true;
-                    return  a->at(0).key<b->at(0).key;
+                    return a->front().key <= b->front().key;
                 }
             );
-
             for(const auto& range:sub_ranges){
                 for(const auto& pkp:(*range)){
-                    std::cout << i++ << "|" << pkp.pos << ":" << pkp.key<< std::endl;
+                    result.push_back(pkp);
                 }
             } 
             return EOS;
@@ -320,7 +325,6 @@ struct SelectEmitter : ff::ff_node_t<int,int> {
     size_t n, p, current = 1;
     SelectEmitter(size_t n, size_t p) : n(n), p(p) {};
     int* svc(int* in) {
-
         if (current > p - 1) return EOS;
         int* k = new int(current * n / p);
         ++current;
@@ -330,7 +334,7 @@ struct SelectEmitter : ff::ff_node_t<int,int> {
 
 
 
-void sort_with_ff(PosKeyVec& data,size_t sorting_workers,size_t num_workers){
+void sort_with_ff(PosKeyVec& data,size_t sorting_workers,size_t num_workers,PosKeyVec& result){
     ff::ff_farm sorting_farm;
     std::vector<ff::ff_node*> workers;
 
@@ -368,7 +372,7 @@ void sort_with_ff(PosKeyVec& data,size_t sorting_workers,size_t num_workers){
         subrange_workers.push_back(new SubMergeWorker(data));
     }
     subranges_sorting_farm.add_workers(subrange_workers);
-    SubRangeCollector src(num_workers,data);
+    SubRangeCollector src(num_workers,data,result);
     subranges_sorting_farm.add_collector(&src);
 
     ff::ff_pipeline pipeline;
@@ -453,13 +457,12 @@ int main(int argc,char*argv[]){
     in_file.close();
     delete[] buffer;
     size_t num_workers=4;
-    std::cout << "done reading" << std::endl;
-    sort_with_ff(pos_key_data,num_workers,num_workers);
-    
+    PosKeyVec result;
+    sort_with_ff(pos_key_data,num_workers,num_workers,result);
     auto end_time = std::chrono::high_resolution_clock::now();
     if (verbose){
         unsigned int i=0;
-        for(const auto& pkp:pos_key_data){
+        for(const auto& pkp:result){
             std::cout<< i++ << "\t[" << pkp.pos << ":" << pkp.key << "]" << std::endl;
         }
     }
