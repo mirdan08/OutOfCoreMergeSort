@@ -32,7 +32,6 @@ struct SortingEmitter: public ff::ff_monode_t<int,IndexPair>{
             IndexPair* res=new IndexPair(chunk_start,chunk_end);     
             ff_send_out(res);
         }
-        std::cout << "done emitting" << std::endl;
         return EOS;
     }
     private:
@@ -50,7 +49,6 @@ struct SortingWorker: public ff::ff_monode_t<IndexPair,IndexPair>{
         IndexPair* res=new IndexPair(in->first,in->second);        
         ff_send_out(res);
         delete in;
-        std::cout << "done sorting" << std::endl;
         return GO_ON;
     }
     private:
@@ -74,19 +72,6 @@ uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair>& ranges, 
             if (bounds[i].first <= bounds[i].second) {
                 size_t mid = bounds[i].first + (bounds[i].second - bounds[i].first) / 2;
                 candidates.push_back(data[mid].key);
-            }
-            if(k==250){
-                std::cout << k<< " ";
-                for(const auto& c:candidates){
-                    std::cout << c<< " ";
-                }
-                std::cout << std::endl;
-
-                for (int i = 0; i < p; ++i) {
-                    if(bounds[i].first < bounds[i].second){
-                        std::cout << i << "-" << bounds[i].first << ":" << bounds[i].second << std::endl;
-                    }
-                }
             }
         }
 
@@ -120,9 +105,6 @@ uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair>& ranges, 
                 });
             
             global_rank += it - subrange_begin;
-        }
-        if(k==250){
-            std::cout << global_rank << "<>" << k << std::endl;
         }
         // Update bounds based on comparison with k
         if (global_rank >= k) {
@@ -178,11 +160,9 @@ struct SelectWorker : ff::ff_node_t<int,uint64_t> {
     SelectWorker(const PosKeyVec& d, const std::vector<IndexPair>& r) : data(d), ranges(r) {}
 
     uint64_t* svc(int* task) {
-        std::cout<< "ms select start" << std::endl;
         int k = *static_cast<int*>(task);
         delete static_cast<int*>(task);
         uint64_t* result = new uint64_t(ms_select(data, ranges, k));
-        std::cout<< "ms select end" << std::endl;
         return result;
     }
 };
@@ -206,18 +186,12 @@ struct SelectCollector : ff::ff_node_t<uint64_t,void> {
 
         if (pivots.size() == p - 1) {
             std::sort(pivots.begin(), pivots.end());
-            std::cout << "Selected Pivots:\t";
-            for (auto val : pivots) std::cout << val << " ";
-            std::cout << "\n";
-
             std::vector<std::vector<IndexPair>*> bucket_subranges(p);
             for (size_t i = 0; i < p; ++i) {
                 bucket_subranges[i] = new std::vector<IndexPair>();
             }
-            std::cout << "done making buckets" << std::endl;
 
             for (const auto& [start_idx, end_idx] : ranges) {
-                std::cout<< "starting on idxs " << start_idx << ":" << end_idx << std::endl;
                 auto begin_it = data.begin() + start_idx;
                 auto end_it = data.begin() + end_idx;
 
@@ -247,7 +221,6 @@ struct SelectCollector : ff::ff_node_t<uint64_t,void> {
                 ff_send_out(bucket_subranges[b]); // Each is vector<IndexPair>*
             }
             return EOS;
-            std::cout << "collector done" << std::endl;
         }
         return GO_ON;
     }
@@ -300,13 +273,12 @@ PosKeyVec
         auto* subranges = static_cast<std::vector<IndexPair>*>(task);
         auto merged = new PosKeyVec(k_way_merge_from_ranges(data, *subranges));
         delete subranges;
-    
         // Process or store `merged` as needed
         return merged;
     }
     
 };
-struct SubRangeCollector : ff::ff_node_t<
+struct SubRangeCollector : ff::ff_minode_t<
 PosKeyVec,
 int
 >{
@@ -318,11 +290,9 @@ int
     SubRangeCollector(int num_workers,PosKeyVec& data):num_workers(num_workers),data(data){};
     int* svc(PosKeyVec* task) {
         auto* merged_result = static_cast<PosKeyVec*>(task);
-        if(range_counter<num_workers-1){
-            sub_ranges.push_back(merged_result);
-            range_counter++;
-        }
-        else{
+        sub_ranges.push_back(merged_result);
+        range_counter++;
+        if(range_counter==num_workers){
             int i=0;
             std::sort(
                 sub_ranges.begin(),sub_ranges.end(),
@@ -331,11 +301,12 @@ int
                     return  a->at(0).key<b->at(0).key;
                 }
             );
+
             for(const auto& range:sub_ranges){
                 for(const auto& pkp:(*range)){
                     std::cout << i++ << "|" << pkp.pos << ":" << pkp.key<< std::endl;
                 }
-            }
+            } 
             return EOS;
         }
         // Process or store `merged` as needed
@@ -353,7 +324,6 @@ struct SelectEmitter : ff::ff_node_t<int,int> {
         if (current > p - 1) return EOS;
         int* k = new int(current * n / p);
         ++current;
-        std::cout << "emitting rank " << *k << std::endl;
         return k;
     }
 };
