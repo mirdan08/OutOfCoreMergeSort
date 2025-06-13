@@ -45,20 +45,19 @@ private:
 struct SortingWorker: public ff::ff_monode_t<IndexPair,IndexPair>{
     SortingWorker(PosKeyVec& data):data(data){};
     IndexPair* svc(IndexPair* in){
+        std::cout<< in->first << ":" <<in->second<< std::endl;
         std::sort(
                     data.begin()+in->first,data.begin()+in->second,
                     [](const PosKeyPair& a,const PosKeyPair& b){return a.key<=b.key;}
-                );
-        IndexPair* res=new IndexPair(in->first,in->second);        
-        ff_send_out(res);
-        delete in;
+                );     
+        ff_send_out(in);
         return GO_ON;
     }
     private:
         PosKeyVec& data;
 };
 
-uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair>& ranges, int k) {
+uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair> ranges, int k) {
     int p = ranges.size();
     // Each pair: first = left bound, second = right bound
     std::vector<std::pair<size_t, size_t>> bounds(p);
@@ -73,7 +72,7 @@ uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair>& ranges, 
         std::vector<uint64_t> candidates;
         for (int i = 0; i < p; ++i) {
             if (bounds[i].first <= bounds[i].second) {
-                size_t mid = bounds[i].first + (bounds[i].second - bounds[i].first) / 2;
+                size_t mid = (bounds[i].first  +  bounds[i].second+1) /2 ;
                 candidates.push_back(data[mid].key);
             }
         }
@@ -97,55 +96,61 @@ uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair>& ranges, 
         for (int i = 0; i < p; ++i) {
             size_t left = bounds[i].first;
             size_t right = bounds[i].second + 1;  // +1 because upper_bound end is exclusive
+            
             auto subrange_begin = data.begin() + left;
             auto subrange_end = data.begin() + right;
-
+            
             auto it = std::upper_bound(
                 subrange_begin, subrange_end,
                 pivot,
                 [](unsigned long val,const PosKeyPair& elem) {
                     return val < elem.key;
                 });
-            
-            global_rank += it - subrange_begin;
-        }
-        // Update bounds based on comparison with k
-        if (global_rank >= k) {
-            for (int i = 0; i < p; ++i) {
-                size_t left = bounds[i].first;
-                size_t right = bounds[i].second + 1;
-                auto subrange_begin = data.begin() + left;
-                auto subrange_end = data.begin() + right;
-
-                auto it = std::upper_bound(
-                    subrange_begin, subrange_end,
-                    pivot,
-                    [](unsigned long val,const PosKeyPair& elem) {
-                        return val < elem.key;
-                    });
-
-                bounds[i].second = (it - data.begin()) - 1;
-                if (bounds[i].second < bounds[i].first) bounds[i].second = bounds[i].first; // Avoid invalid range
+                
+                global_rank += it - subrange_begin;
             }
-        } else {
-            for (int i = 0; i < p; ++i) {
-                size_t left = bounds[i].first;
-                size_t right = bounds[i].second + 1;
-                auto subrange_begin = data.begin() + left;
-                auto subrange_end = data.begin() + right;
-
-                auto it = std::upper_bound(
-                    subrange_begin, subrange_end,
-                    pivot,
-                    [](unsigned long val,const PosKeyPair& elem) {
-                        return val < elem.key;
-                    });
-
-                bounds[i].first =(it - data.begin())+1;
-                if (bounds[i].first > bounds[i].second) bounds[i].first = bounds[i].second; // Avoid invalid range
-            }
-        }
+            // Update bounds based on comparison with k
+            if (global_rank >= k) {
+                    for (int i = 0; i < p; ++i) {
+                        size_t left = bounds[i].first;
+                        size_t right = bounds[i].second + 1;
+                        auto subrange_begin = data.begin() + left;
+                        auto subrange_end = data.begin() + right;
+                        
+                        auto it = std::upper_bound(
+                            subrange_begin, subrange_end,
+                            pivot,
+                            [](unsigned long val,const PosKeyPair& elem) {
+                                return val < elem.key;
+                            });
+                        if (it==data.begin()){
+                            bounds[i].second= bounds[i].first;
+                        }else{
+                            bounds[i].second = (it - data.begin())-1;
+                        }
+                        if (bounds[i].second < bounds[i].first) bounds[i].second = (bounds[i].first==0)? bounds[i].first : bounds[i].first-1; // Avoid invalid range
+                    }
+                } else {
+                    for (int i = 0; i < p; ++i) {
+                        size_t left = bounds[i].first;
+                        size_t right = bounds[i].second + 1;
+                        auto subrange_begin = data.begin() + left;
+                        auto subrange_end = data.begin() + right;
+                        
+                        auto it = std::upper_bound(
+                            subrange_begin, subrange_end,
+                            pivot,
+                            [](unsigned long val,const PosKeyPair& elem) {
+                                return val < elem.key;
+                            });
+                            
+                            bounds[i].first =(it - data.begin());
+                            if (bounds[i].first > bounds[i].second) bounds[i].first = bounds[i].second==data.size()-1? bounds[i].second:bounds[i].second+1; // Avoid invalid range
+                        }
+                }
+                
     }
+    std::cout<<k << "is done"<< std::endl;
 
     uint64_t result = UINT64_MAX;
     for (int i = 0; i < p; ++i) {
@@ -158,14 +163,19 @@ uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair>& ranges, 
 // ---- SelectWorker: receives k and outputs k-th global key ----
 struct SelectWorker : ff::ff_node_t<int,uint64_t> {
     const PosKeyVec& data;
-    const std::vector<IndexPair>& ranges;
+    const std::vector<IndexPair> ranges;
 
-    SelectWorker(const PosKeyVec& d, const std::vector<IndexPair>& r) : data(d), ranges(r) {}
+    SelectWorker(const PosKeyVec& d, const std::vector<IndexPair> r) : data(d), ranges(r) {}
 
     uint64_t* svc(int* task) {
-        int k = *static_cast<int*>(task);
-        delete static_cast<int*>(task);
+
+        int k = *task;
+        assert(k>=0 && k< data.size());
+        for(const auto& range:ranges){
+            assert( range.second<=data.size());
+        }
         uint64_t* result = new uint64_t(ms_select(data, ranges, k));
+        delete task;
         return result;
     }
 };
@@ -186,48 +196,47 @@ struct SelectCollector : ff::ff_minode_t<uint64_t,void> {
     }
 
     void* svc(uint64_t* task) {
-        uint64_t pivot = *static_cast<uint64_t*>(task);
-        delete static_cast<uint64_t*>(task);
-        pivots.push_back(pivot);
-
+        pivots.push_back(*task);
+        std::cout << "pivots " <<pivots.size() << " of "<< p-1 << " value "<< *task << std::endl;
         if (pivots.size() == p - 1) {
             std::sort(pivots.begin(), pivots.end());
             std::vector<std::vector<IndexPair>*> bucket_subranges(p);
             for (size_t i = 0; i < p; ++i) {
                 bucket_subranges[i] = new std::vector<IndexPair>();
             }
-
+            
             for (const auto& [start_idx, end_idx] : ranges) {
                 auto begin_it = data.begin() + start_idx;
                 auto end_it = data.begin() + end_idx;
-
+                
                 size_t last_idx = start_idx;
-
+                
                 for (size_t b = 0; b < p; ++b) {
                     auto low = data.begin() + last_idx;
-
+                    
                     auto high = (b < pivots.size())
-                        ? std::upper_bound(low, end_it, pivots[b],
-                            [](uint64_t val, const PosKeyPair& elem) {
-                                return val < elem.key;
-                            })
+                    ? std::upper_bound(low, end_it, pivots[b],
+                        [](uint64_t val, const PosKeyPair& elem) {
+                            return val < elem.key;
+                        })
                         : end_it;
-
-                    if (low < high) {
-                        bucket_subranges[b]->emplace_back(low - data.begin(), high - data.begin());
+                        
+                        if (low < high) {
+                            bucket_subranges[b]->emplace_back(low - data.begin(), high - data.begin());
+                        }
+                        
+                        last_idx = high - data.begin();
+                        if (last_idx >= end_idx) break;
                     }
-
-                    last_idx = high - data.begin();
-                    if (last_idx >= end_idx) break;
+                    
                 }
-
-            }
-
-            for (size_t b = 0; b < p; ++b) {
-                ff_send_out(bucket_subranges[b]); // Each is vector<IndexPair>*
-            }
-            return EOS;
+                
+                for (size_t b = 0; b < p; ++b) {
+                    ff_send_out(bucket_subranges[b]); // Each is vector<IndexPair>*
+                }
+                return EOS;
         }
+        //delete static_cast<uint64_t*>(task);
         return GO_ON;
     }
 };
@@ -268,17 +277,16 @@ std::vector<PosKeyPair> k_way_merge_from_ranges(
     return merged;
 }
 struct SubMergeWorker : ff::ff_node_t<
-std::vector<std::pair<unsigned long,unsigned long>>,
+std::vector<IndexPair>,
 PosKeyVec
 >{
 
     PosKeyVec& data;
     SubMergeWorker(PosKeyVec& data):data(data){}
     
-    PosKeyVec* svc(std::vector<std::pair<unsigned long,unsigned long>>* task) {
-        auto* subranges = static_cast<std::vector<IndexPair>*>(task);
-        auto merged = new PosKeyVec(k_way_merge_from_ranges(data, *subranges));
-        delete subranges;
+    PosKeyVec* svc(std::vector<IndexPair>* task) {
+        PosKeyVec* merged = new PosKeyVec(k_way_merge_from_ranges(data, *task));
+        //delete task;
         // Process or store `merged` as needed
         return merged;
     }
@@ -314,7 +322,6 @@ int
             } 
             return EOS;
         }
-        // Process or store `merged` as needed
         return GO_ON;
     }
     
@@ -349,14 +356,18 @@ void sort_with_ff(PosKeyVec& data,size_t sorting_workers,size_t num_workers,PosK
     ranking_farm.add_emitter(SelectEmitter(data.size(),num_workers));
     
     std::vector<IndexPair> sorted_ranges;
+    size_t chunk_base = data.size() / num_workers;
+    size_t remainder = data.size() % num_workers;
 
-    size_t chunk_size= data.size()/num_workers; 
-
-    for(int i=0;i<num_workers;i++){
-        size_t chunk_start=i*chunk_size;
-        size_t chunk_end= i*chunk_size + std::min(chunk_size,data.size()-chunk_start);
-        sorted_ranges.push_back(IndexPair(chunk_start,chunk_end));
+    size_t start = 0;
+    for (size_t i = 0; i < num_workers; ++i) {
+        size_t chunk_size = chunk_base + (i < remainder ? 1 : 0);
+        size_t end = start + chunk_size;
+        assert(start>=0 && end<=data.size());
+        sorted_ranges.push_back(IndexPair(start,end));
+        start = end;
     }
+
 
     std::vector<ff::ff_node*> rank_workers;
     for (int i=0;i<sorting_workers;i++){
@@ -438,7 +449,6 @@ int main(int argc,char*argv[]){
         unsigned int buffer_length=std::min(buffer_size,(uint)file_size-(uint)(file_header_size) -buffer_start);
         in_file.seekg(file_header_size+offset_header_size+buffer_offset);
         in_file.read(buffer,buffer_length);
-
         //Note: header is not read in the buffer
         //If the offset exceed the payload header size stop
         while( record_offset + payload_header_size< buffer_length && records_count < records_num){
@@ -456,7 +466,13 @@ int main(int argc,char*argv[]){
     }
     in_file.close();
     delete[] buffer;
-    size_t num_workers=4;
+    if (verbose){
+        unsigned int i=0;
+        for(const auto& pkp:pos_key_data){
+            std::cout<< i++ << "\t[" << pkp.pos << ":" << pkp.key << "]" << std::endl;
+        }
+    }
+    size_t num_workers=threads_num;
     PosKeyVec result;
     sort_with_ff(pos_key_data,num_workers,num_workers,result);
     auto end_time = std::chrono::high_resolution_clock::now();
