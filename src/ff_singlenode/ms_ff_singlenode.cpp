@@ -71,8 +71,8 @@ uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair> ranges, i
         // Gather candidates: pick middle element of each subrange
         std::vector<uint64_t> candidates;
         for (int i = 0; i < p; ++i) {
-            if (bounds[i].first <= bounds[i].second) {
-                size_t mid = (bounds[i].first  +  bounds[i].second+1) /2 ;
+            if (bounds[i].first < bounds[i].second) {
+                size_t mid = (bounds[i].first  +  bounds[i].second) /2 ;
                 candidates.push_back(data[mid].key);
             }
         }
@@ -111,29 +111,10 @@ uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair> ranges, i
             }
             // Update bounds based on comparison with k
             if (global_rank >= k) {
+                    std::cout<< "too high" << std::endl;
                     for (int i = 0; i < p; ++i) {
                         size_t left = bounds[i].first;
-                        size_t right = bounds[i].second + 1;
-                        auto subrange_begin = data.begin() + left;
-                        auto subrange_end = data.begin() + right;
-                        
-                        auto it = std::upper_bound(
-                            subrange_begin, subrange_end,
-                            pivot,
-                            [](unsigned long val,const PosKeyPair& elem) {
-                                return val < elem.key;
-                            });
-                        if (it==data.begin()){
-                            bounds[i].second= bounds[i].first;
-                        }else{
-                            bounds[i].second = (it - data.begin())-1;
-                        }
-                        if (bounds[i].second < bounds[i].first) bounds[i].second = (bounds[i].first==0)? bounds[i].first : bounds[i].first-1; // Avoid invalid range
-                    }
-                } else {
-                    for (int i = 0; i < p; ++i) {
-                        size_t left = bounds[i].first;
-                        size_t right = bounds[i].second + 1;
+                        size_t right = bounds[i].second +1;
                         auto subrange_begin = data.begin() + left;
                         auto subrange_end = data.begin() + right;
                         
@@ -144,13 +125,32 @@ uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair> ranges, i
                                 return val < elem.key;
                             });
                             
-                            bounds[i].first =(it - data.begin());
-                            if (bounds[i].first > bounds[i].second) bounds[i].first = bounds[i].second==data.size()-1? bounds[i].second:bounds[i].second+1; // Avoid invalid range
+                            bounds[i].second = it - data.begin()-1;
+                            
+                            //if (bounds[i].second < bounds[i].first) bounds[i].second = (bounds[i].first==0)? bounds[i].first : bounds[i].first-1; // Avoid invalid range
                         }
+                    } else {
+                        std::cout<< "too low" << std::endl;
+                        for (int i = 0; i < p; ++i) {
+                        size_t left = bounds[i].first;
+                        size_t right = bounds[i].second + 1;
+                        auto subrange_begin = data.begin() + left;
+                        auto subrange_end = data.begin() + right;
+                        
+                        auto it = std::upper_bound(
+                            subrange_begin, subrange_end,
+                            pivot,
+                            [](unsigned long val,const PosKeyPair& elem) {
+                                return val < elem.key;
+                            }
+                        );
+                            
+                        bounds[i].first =it - data.begin();
+                        //if (bounds[i].first > bounds[i].second) bounds[i].first = bounds[i].second==data.size()-1? bounds[i].second:bounds[i].second+1; // Avoid invalid range
+                    }
                 }
                 
     }
-    std::cout<<k << "is done"<< std::endl;
 
     uint64_t result = UINT64_MAX;
     for (int i = 0; i < p; ++i) {
