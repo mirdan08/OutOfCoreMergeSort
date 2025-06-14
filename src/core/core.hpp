@@ -6,7 +6,7 @@
 #endif
 
 #ifndef RMAX_MEMORY_LIMIT
-#define RMAX_MEMORY_LIMIT 32*1024*1024
+#define RMAX_MEMORY_LIMIT 1024
 #endif
 
 //max payload size
