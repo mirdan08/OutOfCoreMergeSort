@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <omp.h>
 
 using PosKeyVec=std::vector<PosKeyPair>;
 
@@ -91,9 +92,79 @@ int main(int argc,char*argv[]){
             std::cout<< i++ << "\t[" << pkp.pos << ":" << pkp.key << "]" << std::endl;
         }
     }
-    size_t num_workers=threads_num;
-    PosKeyVec result;
 
+    const int threads_work_load=pos_key_data.size()/threads_num;
+    #pragma omp parallel for shared(pos_key_pair)
+    for(int i=0;i<threads_num;i++){
+        const int start=i*threads_work_load;
+        const int end=std::min(pos_key_data.size(),(unsigned long)start + threads_work_load);
+        std::sort(
+            pos_key_data.begin()+start,pos_key_data.begin()+end,
+            [](const PosKeyPair& a,const PosKeyPair& b){return a.key<=b.key;}
+        );
+    }
+    
+    // estimating  the ranks using ms_select
+    
+    std::vector<uint64_t> pivots(threads_num-1);
+    
+    std::vector<IndexPair> sub_ranges(threads_num);
+    for(int i=0;i<threads_num;i++){
+        const int start=i*threads_work_load;
+        const int end=std::min(pos_key_data.size(),(unsigned long)start + threads_work_load);
+        sub_ranges.push_back(IndexPair(start,end));
+    }
+
+    #pragma omp parallel for shared(pivots) private(sub_ranges)
+    for(int i=0;i<pivots.size();i++){
+        int rank=i*(pos_key_data.size()/threads_num);
+        pivots[i]=ms_select(pos_key_data,sub_ranges,rank);
+    }
+
+
+
+    std::vector<std::vector<IndexPair>> bucket_subranges(threads_num);
+
+    for (const auto& [start, end] : sub_ranges) {
+        auto begin_it = pos_key_data.begin() + start;
+        auto end_it = pos_key_data.begin() + end;
+        
+        size_t last_idx = start;
+        
+        for (size_t b = 0; b < threads_num; ++b) {
+            auto low = pos_key_data.begin() + last_idx;
+            
+            auto high = (b < pivots.size())
+            ? std::upper_bound(low, end_it, pivots[b],
+                [](uint64_t val, const PosKeyPair& elem) {
+                    return val < elem.key;
+                })
+                : end_it;
+                
+            if (low < high) {
+                bucket_subranges[b].emplace_back(low - pos_key_data.begin(), high - pos_key_data.begin());
+            }
+            
+            last_idx = high - pos_key_data.begin();
+            if (last_idx >= end) break;
+        }
+            
+    }
+    PosKeyVec result;
+    std::vector<PosKeyVec> merged_ranges(threads_num);
+    #pragma omp parallel for shared(pos_key_data) shared(bucket_subranges)
+    for(int i=0;i<threads_num;i++){
+        const int start=i*threads_work_load;
+        const int end=std::min(pos_key_data.size(),(unsigned long)start + threads_work_load);
+        PosKeyVec merged= k_way_merge_from_ranges(pos_key_data,bucket_subranges[i]);
+        merged_ranges[i]=merged;
+    }
+
+    for(const auto& range:merged_ranges){
+        for(const auto& pkp:range){
+            result.push_back(pkp);
+        }
+    }
     //openmp implementation
     auto end_time = std::chrono::high_resolution_clock::now();
     if (verbose){

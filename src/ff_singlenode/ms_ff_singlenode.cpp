@@ -11,11 +11,6 @@
 #include <cstdlib>
 #include <cstring>
 
-using PosKeyVec=std::vector<PosKeyPair>;
-
-using IndexPair=std::pair<unsigned long,unsigned long>;
-using SortResult=std::tuple<unsigned long,unsigned long,unsigned long>;
-
 
 //initial sorter for mergesort
 struct SortingEmitter : public ff::ff_monode_t<int, IndexPair> {
@@ -56,110 +51,6 @@ struct SortingWorker: public ff::ff_monode_t<IndexPair,IndexPair>{
     private:
         PosKeyVec& data;
 };
-
-uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair> ranges, int k) {
-    int p = ranges.size();
-    // Each pair: first = left bound, second = right bound
-    std::vector<std::pair<size_t, size_t>> bounds(p);
-
-    for (int i = 0; i < p; ++i) {
-        bounds[i].first = ranges[i].first;
-        bounds[i].second = ranges[i].second - 1;
-    }
-
-    while (true) {
-        // Gather candidates: pick middle element of each subrange
-        std::vector<uint64_t> candidates;
-        for (int i = 0; i < p; ++i) {
-            if (bounds[i].first < bounds[i].second) {
-                size_t mid = (bounds[i].first  +  bounds[i].second) /2 ;
-                candidates.push_back(data[mid].key);
-            }
-        }
-
-        bool finished = true;
-        for (int i = 0; i < p; ++i) {
-            if (bounds[i].first < bounds[i].second) {
-                finished = false;
-                break;
-            }
-        }
-        if (finished) break;
-
-        // Select median of candidates as pivot
-        size_t mid = candidates.size() / 2;
-        std::nth_element(candidates.begin(), candidates.begin() + mid, candidates.end());
-        uint64_t pivot = candidates[mid];
-
-        // Calculate global rank of pivot
-        int global_rank = 0;
-        for (int i = 0; i < p; ++i) {
-            size_t left = bounds[i].first;
-            size_t right = bounds[i].second + 1;  // +1 because upper_bound end is exclusive
-            
-            auto subrange_begin = data.begin() + left;
-            auto subrange_end = data.begin() + right;
-            
-            auto it = std::upper_bound(
-                subrange_begin, subrange_end,
-                pivot,
-                [](unsigned long val,const PosKeyPair& elem) {
-                    return val < elem.key;
-                });
-                
-                global_rank += it - subrange_begin;
-            }
-            // Update bounds based on comparison with k
-            if (global_rank >= k) {
-                    std::cout<< "too high" << std::endl;
-                    for (int i = 0; i < p; ++i) {
-                        size_t left = bounds[i].first;
-                        size_t right = bounds[i].second +1;
-                        auto subrange_begin = data.begin() + left;
-                        auto subrange_end = data.begin() + right;
-                        
-                        auto it = std::upper_bound(
-                            subrange_begin, subrange_end,
-                            pivot,
-                            [](unsigned long val,const PosKeyPair& elem) {
-                                return val < elem.key;
-                            });
-                            
-                            bounds[i].second = it - data.begin()-1;
-                            
-                            //if (bounds[i].second < bounds[i].first) bounds[i].second = (bounds[i].first==0)? bounds[i].first : bounds[i].first-1; // Avoid invalid range
-                        }
-                    } else {
-                        std::cout<< "too low" << std::endl;
-                        for (int i = 0; i < p; ++i) {
-                        size_t left = bounds[i].first;
-                        size_t right = bounds[i].second + 1;
-                        auto subrange_begin = data.begin() + left;
-                        auto subrange_end = data.begin() + right;
-                        
-                        auto it = std::upper_bound(
-                            subrange_begin, subrange_end,
-                            pivot,
-                            [](unsigned long val,const PosKeyPair& elem) {
-                                return val < elem.key;
-                            }
-                        );
-                            
-                        bounds[i].first =it - data.begin();
-                        //if (bounds[i].first > bounds[i].second) bounds[i].first = bounds[i].second==data.size()-1? bounds[i].second:bounds[i].second+1; // Avoid invalid range
-                    }
-                }
-                
-    }
-
-    uint64_t result = UINT64_MAX;
-    for (int i = 0; i < p; ++i) {
-        if (bounds[i].first <= bounds[i].second) {
-            result = std::min(result, data[bounds[i].first].key);
-        }
-    }
-    return result;
-}
 // ---- SelectWorker: receives k and outputs k-th global key ----
 struct SelectWorker : ff::ff_node_t<int,uint64_t> {
     const PosKeyVec& data;
@@ -240,42 +131,7 @@ struct SelectCollector : ff::ff_minode_t<uint64_t,void> {
         return GO_ON;
     }
 };
-std::vector<PosKeyPair> k_way_merge_from_ranges(
-    const PosKeyVec& data,
-    const std::vector<IndexPair>& subranges
-) {
-    size_t k = subranges.size();
-    std::vector<size_t> positions(k);
-    for (size_t i = 0; i < k; ++i) {
-        positions[i] = subranges[i].first;
-    }
 
-    std::vector<PosKeyPair> merged;
-    std::vector<size_t> min_positions(subranges.size(),0);
-
-    while (true) {
-        int min_idx = -1;
-        uint64_t min_key = UINT64_MAX;
-
-        for (size_t i = 0; i < k; ++i) {
-            size_t pos = positions[i];
-            if (pos < subranges[i].second) {
-                uint64_t key = data[pos].key;
-                if (key < min_key) {
-                    min_key = key;
-                    min_idx = i;
-                }
-            }
-        }
-
-        if (min_idx == -1)
-            break;  // All subranges are exhausted
-
-        merged.push_back(data[positions[min_idx]]);
-        positions[min_idx]++;
-    }
-    return merged;
-}
 struct SubMergeWorker : ff::ff_node_t<
 std::vector<IndexPair>,
 PosKeyVec

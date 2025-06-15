@@ -1,5 +1,12 @@
 #include <cstdint>
 #include<fstream>
+#include <vector>
+#include <algorithm>
+#include <fstream>
+#include <memory>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
 
 #ifndef RPAYLOAD_MAX
 #define RPAYLOAD_MAX 100
@@ -31,3 +38,12 @@ struct PosKeyPair{
 
 Record* read_record(std::ifstream& in_file);
 void write_record(Record& record,std::ofstream& out_file);
+
+
+using PosKeyVec=std::vector<PosKeyPair>;
+
+using IndexPair=std::pair<unsigned long,unsigned long>;
+using SortResult=std::tuple<unsigned long,unsigned long,unsigned long>;
+
+uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair> ranges, int k) ;
+std::vector<PosKeyPair> k_way_merge_from_ranges(const PosKeyVec& data,const std::vector<IndexPair>& subranges);
