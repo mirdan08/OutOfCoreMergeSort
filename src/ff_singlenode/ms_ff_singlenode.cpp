@@ -40,13 +40,11 @@ private:
 struct SortingWorker: public ff::ff_monode_t<IndexPair,IndexPair>{
     SortingWorker(PosKeyVec& data):data(data){};
     IndexPair* svc(IndexPair* in){
-        std::cout<< in->first << ":" <<in->second<< std::endl;
         std::sort(
                     data.begin()+in->first,data.begin()+in->second,
-                    [](const PosKeyPair& a,const PosKeyPair& b){return a.key<=b.key;}
-                );     
-        ff_send_out(in);
-        return GO_ON;
+                    [](const PosKeyPair& a,const PosKeyPair& b){return a.key<b.key;}
+                );
+        return in;
     }
     private:
         PosKeyVec& data;
@@ -61,12 +59,8 @@ struct SelectWorker : ff::ff_node_t<int,uint64_t> {
     uint64_t* svc(int* task) {
 
         int k = *task;
-        assert(k>=0 && k< data.size());
-        for(const auto& range:ranges){
-            assert( range.second<=data.size());
-        }
         uint64_t* result = new uint64_t(ms_select(data, ranges, k));
-        delete task;
+        //delete task;
         return result;
     }
 };
@@ -88,7 +82,8 @@ struct SelectCollector : ff::ff_minode_t<uint64_t,void> {
 
     void* svc(uint64_t* task) {
         pivots.push_back(*task);
-        std::cout << "pivots " <<pivots.size() << " of "<< p-1 << " value "<< *task << std::endl;
+
+        //delete task;
         if (pivots.size() == p - 1) {
             std::sort(pivots.begin(), pivots.end());
             std::vector<std::vector<IndexPair>*> bucket_subranges(p);
@@ -159,10 +154,11 @@ int
     int num_workers;
     SubRangeCollector(int num_workers,PosKeyVec& data,PosKeyVec& result):num_workers(num_workers),data(data),result(result){};
     int* svc(PosKeyVec* task) {
-        auto* merged_result = static_cast<PosKeyVec*>(task);
+        auto* merged_result = task;
         if(!merged_result->empty()){
             sub_ranges.push_back(merged_result);
         }
+        //delete task;
         range_counter++;
         if(range_counter==num_workers){
             std::sort(
@@ -188,6 +184,7 @@ struct SelectEmitter : ff::ff_node_t<int,int> {
     size_t n, p, current = 1;
     SelectEmitter(size_t n, size_t p) : n(n), p(p) {};
     int* svc(int* in) {
+        //delete in;
         if (current > p - 1) return EOS;
         int* k = new int(current * n / p);
         ++current;
@@ -219,7 +216,6 @@ void sort_with_ff(PosKeyVec& data,size_t sorting_workers,size_t num_workers,PosK
     for (size_t i = 0; i < num_workers; ++i) {
         size_t chunk_size = chunk_base + (i < remainder ? 1 : 0);
         size_t end = start + chunk_size;
-        assert(start>=0 && end<=data.size());
         sorted_ranges.push_back(IndexPair(start,end));
         start = end;
     }
@@ -328,6 +324,7 @@ int main(int argc,char*argv[]){
             std::cout<< i++ << "\t[" << pkp.pos << ":" << pkp.key << "]" << std::endl;
         }
     }
+
     size_t num_workers=threads_num;
     PosKeyVec result;
     sort_with_ff(pos_key_data,num_workers,num_workers,result);

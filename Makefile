@@ -5,7 +5,7 @@ CXXFLAGS= -std=c++20
 
 INCLUDES   = -Iinclude/fastflow/ -Isrc/
 LDFLAGS    = -pthread -Wall -Wextra
-OPTFLAGS   = -O3 -ffast-math 
+OPTFLAGS   = -O3 -ffast-math -DNDEBUG
 
 RPAYLOAD_MAX = 32
 
@@ -16,8 +16,8 @@ TARGETS    = ms_sequential ff_singlenode openmp_singlenode mpi_multinode payload
 CORE_SRC   = src/core/core.cpp
 SEQ_SRC    = src/sequential/ms_sequential.cpp
 FF_SRC 	   = src/ff_singlenode/ms_ff_singlenode.cpp
-OMP_SRC 	   = src/openmp_singlenode/ms_openmp_singlenode.cpp
-UTILS_SRC    = src/utils/utils.cpp
+OMP_SRC    = src/openmp_singlenode/ms_openmp_singlenode.cpp
+UTILS_SRC  = src/utils/utils.cpp
 # Object files
 CORE_OBJ = $(CORE_SRC:.cpp=.o)
 FF_OBJ = $(FF_SRC:.cpp=.o)

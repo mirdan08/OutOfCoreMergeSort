@@ -60,7 +60,8 @@ uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair> ranges, i
             }
         }
         if(candidates.empty()) break;
-        bool finished = true;
+
+        /* bool finished = true;
         for (int i = 0; i < p; ++i) {
             if (bounds[i].first < bounds[i].second) {
                 finished = false;
@@ -68,13 +69,12 @@ uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair> ranges, i
             }
         }
         if (finished) break;
-
+ */
         // Select median of candidates as pivot
         size_t mid = candidates.size() / 2;
         std::nth_element(candidates.begin(), candidates.begin() + mid, candidates.end());
         uint64_t pivot = candidates[mid];
 
-        // Calculate global rank of pivot
         int global_rank = 0;
         for (int i = 0; i < p; ++i) {
             size_t left = bounds[i].first;
@@ -92,6 +92,7 @@ uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair> ranges, i
                 
                 global_rank += it - subrange_begin;
             }
+            std::cout<< "ms select" << std::endl;
             if (global_rank >= k) {
                 for (int i = 0; i < p; ++i) {
                     
@@ -106,9 +107,10 @@ uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair> ranges, i
                         pivot,
                         [](unsigned long val,const PosKeyPair& elem) {
                             return val < elem.key;
-                        });
+                        }
+                    );
                     auto offset=it-data.begin();
-                    if( offset==0 ||  offset< bounds[i].first){
+                    if( offset==0 ||  offset< bounds[i].first || it==subrange_end){
                         bounds[i].second=bounds[i].first;
                     }else{
                         bounds[i].second=offset-1;
@@ -130,7 +132,7 @@ uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair> ranges, i
                     );
 
                     auto offset=it-data.begin();
-                    if(offset==0 || offset < bounds[i].first){
+                    if(offset==0 || offset < bounds[i].first || it==subrange_end){
                         bounds[i].first=bounds[i].second;
                     }else{
                         bounds[i].first =offset;

@@ -100,7 +100,7 @@ int main(int argc,char*argv[]){
         const int end=std::min(pos_key_data.size(),(unsigned long)start + threads_work_load);
         std::sort(
             pos_key_data.begin()+start,pos_key_data.begin()+end,
-            [](const PosKeyPair& a,const PosKeyPair& b){return a.key<=b.key;}
+            [](const PosKeyPair& a,const PosKeyPair& b){return a.key<b.key;}
         );
     }
     
@@ -161,20 +161,18 @@ int main(int argc,char*argv[]){
     }
 
     for(const auto& range:merged_ranges){
-        for(const auto& pkp:range){
-            result.push_back(pkp);
-        }
+        result.insert(result.end(),range.begin(),range.end());
     }
     //openmp implementation
     auto end_time = std::chrono::high_resolution_clock::now();
     if (verbose){
         unsigned int i=0;
         for(const auto& pkp:result){
-            std::cout<< i++ << "\t[" << pkp.pos << ":" << pkp.key << "]" << std::endl;
+            std::cout << i++ << "\t[" << pkp.pos << ":" << pkp.key << "]" << std::endl;
         }
     }
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-    std::cout<< "time(ms):" << duration.count() << std::endl;
+    std::cout << "time(ms):" << duration.count() << std::endl;
 
     return 0;
 }
