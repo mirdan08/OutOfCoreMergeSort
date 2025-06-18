@@ -40,6 +40,8 @@ void write_record(Record& record,std::ofstream& out_file){
 }
 
 
+
+
 uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair> ranges, int k) {
     int p = ranges.size();
     // Each pair: first = left bound, second = right bound
@@ -92,7 +94,6 @@ uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair> ranges, i
                 
                 global_rank += it - subrange_begin;
             }
-            std::cout<< "ms select" << std::endl;
             if (global_rank >= k) {
                 for (int i = 0; i < p; ++i) {
                     
