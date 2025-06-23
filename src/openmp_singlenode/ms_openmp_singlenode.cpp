@@ -35,7 +35,7 @@ int main(int argc,char*argv[]){
         std::cout << "please specify the output file path" << std::endl;
         return 1;
     }
-
+    omp_set_num_threads(threads_num);
     auto start_time = std::chrono::high_resolution_clock::now();
     std::vector<PosKeyPair> pos_key_data= read_records(in_filename,memory_limit);
     if (verbose){
@@ -44,40 +44,41 @@ int main(int argc,char*argv[]){
             std::cout<< i++ << "\t[" << pkp.pos << ":" << pkp.key << "]" << std::endl;
         }
     }
+    std::vector<IndexPair> sorted_ranges;
+    size_t chunk_base = pos_key_data.size() / threads_num;
+    size_t remainder = pos_key_data.size() % threads_num;
+
+    size_t start = 0;
+    for (size_t i = 0; i < threads_num; ++i) {
+        size_t chunk_size = chunk_base + (i < remainder ? 1 : 0);
+        size_t end = start + chunk_size;
+        sorted_ranges.push_back(IndexPair(start,end));
+        start = end;
+    }
 
     const int threads_work_load=pos_key_data.size()/threads_num;
     #pragma omp parallel for shared(pos_key_pair)
     for(int i=0;i<threads_num;i++){
-        const int start=i*threads_work_load;
-        const int end=std::min(pos_key_data.size(),(unsigned long)start + threads_work_load);
+        const int start=sorted_ranges[i].first;
+        const int end=sorted_ranges[i].second;
         std::sort(
             pos_key_data.begin()+start,pos_key_data.begin()+end,
             [](const PosKeyPair& a,const PosKeyPair& b){return a.key<b.key;}
         );
     }
-    
     // estimating  the ranks using ms_select
     
     std::vector<uint64_t> pivots(threads_num-1);
-    
-    std::vector<IndexPair> sub_ranges(threads_num);
-    for(int i=0;i<threads_num;i++){
-        const int start=i*threads_work_load;
-        const int end=std::min(pos_key_data.size(),(unsigned long)start + threads_work_load);
-        sub_ranges.push_back(IndexPair(start,end));
-    }
 
-    #pragma omp parallel for shared(pivots) private(sub_ranges)
-    for(int i=0;i<pivots.size();i++){
+    #pragma omp parallel for shared(pivots) shared(sub_ranges)
+    for(int i=1;i<pivots.size();i++){
         int rank=i*(pos_key_data.size()/threads_num);
-        pivots[i]=ms_select(pos_key_data,sub_ranges,rank);
+
+        pivots[i]=ms_select(pos_key_data,sorted_ranges,rank);
     }
-
-
-
     std::vector<std::vector<IndexPair>> bucket_subranges(threads_num);
 
-    for (const auto& [start, end] : sub_ranges) {
+    for (const auto& [start, end] : sorted_ranges) {
         auto begin_it = pos_key_data.begin() + start;
         auto end_it = pos_key_data.begin() + end;
         

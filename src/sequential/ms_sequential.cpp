@@ -58,7 +58,7 @@ int main(int argc,char*argv[]){
     }
     in_file.close();
     out_file.close();
-    delete[] buffer;
+    //delete[] buffer;
     if (verbose){
         std::cout<< "done writing" << std::endl;
         unsigned int i=0;
