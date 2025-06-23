@@ -16,7 +16,7 @@
 //max payload size
 const unsigned long payload_max= RPAYLOAD_MAX;
 
-//max memory limit for single node
+//default max memory limit for single node
 const unsigned long MAX_MEMORY_LIMIT=3359738368;
 //a single record struct
 struct Record {
@@ -24,11 +24,18 @@ struct Record {
     uint64_t key; 
     char payload[payload_max];
 };
+struct MemoryRecord{
+    uint32_t len; 
+    uint64_t key; 
+    uint64_t offset;
+};
 
 //used to sort the values within a single node
 struct PosKeyPair{
     uint64_t key; 
-    uint64_t pos; 
+    uint64_t pos;
+    uint64_t len;
+    uint64_t offset; 
 };
 
 

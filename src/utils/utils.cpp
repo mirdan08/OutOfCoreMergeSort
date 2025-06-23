@@ -1,8 +1,8 @@
 #include<utils/utils.hpp>
 
-bool parse_cli_args(int argc,char*argv[],size_t& threads_num,bool& verbose,std::string& filename){
+bool parse_cli_args(int argc,char*argv[],size_t& threads_num,bool& verbose,std::string& in_filename,std::string& out_filename,size_t& memory_limit){
     int opt;
-    while ((opt = getopt(argc, argv, "t:v:i:")) != -1) {
+    while ((opt = getopt(argc, argv, "t:v:i:o:")) != -1) {
         switch (opt) {
             case 't': {
                 threads_num = std::stoi(optarg);
@@ -14,9 +14,19 @@ bool parse_cli_args(int argc,char*argv[],size_t& threads_num,bool& verbose,std::
                 break;
             }
             case 'i':{
-                filename = optarg;
+                in_filename = optarg;
                 break;
             }
+            case 'o':{
+                out_filename = optarg;
+                break;
+            }
+
+            case 'm':{
+                memory_limit = std::stoul(optarg);
+                break;
+            }
+
             default:{
                 std::cout << "wrong arguments" << std::endl;
                 return false;
@@ -27,41 +37,45 @@ bool parse_cli_args(int argc,char*argv[],size_t& threads_num,bool& verbose,std::
     return true;
 }
 
-void read_payloads(std::ifstream& in_file,const unsigned long MAX_MEMORY_LIMIT,uint64_t records_num,std::vector<PosKeyPair>& pos_key_data){
+std::vector<PosKeyPair> read_records(std::string& file_path,const unsigned long memory_limt){
+    std::vector<PosKeyPair> pos_key_data;
+    std::ifstream in_file(file_path,std::ifstream::binary | std::ifstream::ate);
+    //get file size and return to normal position
     std::streamsize file_size= in_file.tellg();
-    const unsigned int header_offset=in_file.tellg();
+    in_file.seekg(0);
     unsigned long records_count=0;
-    size_t current_size=0;
-    const unsigned int max_record_size=payload_max+sizeof(uint32_t)+sizeof(uint64_t);
-    const unsigned int buffer_size= std::min(MAX_MEMORY_LIMIT,max_record_size*records_num);
+    //if file is smaller than available memory we just load it
+    const unsigned int buffer_size= std::min(memory_limt,(unsigned long)file_size);
     char* buffer=new char[buffer_size];
-    const unsigned int payload_header_size=sizeof(uint32_t)+sizeof(uint64_t);
-    const unsigned int file_header_size=sizeof(uint64_t)+sizeof(uint64_t);
-    const unsigned int offset_header_size=sizeof(uint64_t)*records_num;
+    const unsigned int payload_header_size=sizeof(uint64_t)+sizeof(uint64_t);
     // we read only keys and store the indexes to apply std::sort
     unsigned int buffer_offset=0;
     unsigned int record_offset=0;
-    while(records_count<records_num){
+    unsigned int bytes_read=0;
+    while(bytes_read<file_size){
         unsigned int buffer_start=buffer_offset;
+        record_offset=0;
         //avoid reading over the buffer length
         unsigned int buffer_length=std::min(buffer_size,(uint)file_size-buffer_start);
-        in_file.seekg(file_header_size+offset_header_size+buffer_start);
+        in_file.seekg(buffer_start);
         in_file.read(buffer,buffer_length);
         //Note: header is not read in the buffer
         //If the offset exceed the payload header size stop
-        while( (record_offset + payload_header_size)< buffer_length && records_count < records_num){
+        while( (record_offset + payload_header_size)< buffer_length && bytes_read<file_size){
             PosKeyPair pkp;
-            uint32_t payload_len=0;
-            std::memcpy(&payload_len,buffer+record_offset,sizeof(uint32_t));
-            std::memcpy(&pkp.key,buffer+record_offset+sizeof(uint32_t),sizeof(uint64_t));
+            std::memcpy(&pkp.key,buffer+record_offset,sizeof(uint64_t));
+            std::memcpy(&pkp.len,buffer+record_offset+sizeof(uint64_t),sizeof(uint64_t));
             pkp.pos=records_count;
+            
+            pkp.offset=buffer_start+record_offset;
+            record_offset+=pkp.len+payload_header_size;
+            bytes_read+=pkp.len+payload_header_size;
             pos_key_data.push_back(std::move(pkp));
-            record_offset+=payload_len+payload_header_size;
             ++records_count;
         }
         buffer_offset+=record_offset;
-        record_offset=0;
     }
     in_file.close();
     delete[] buffer;
+    return std::move(pos_key_data);
 }

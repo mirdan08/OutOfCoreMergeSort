@@ -34,11 +34,12 @@ for i in $(seq 1 $trials); do
         for nr in "${n_records[@]}"; do
             make cleanall
             make RPAYLOAD_MAX=$mp ms_sequential
-            output=$(./ms_sequential -i test_files/file_mp${mp}_nr${nr}.pms -v 0)
+            output=$(./ms_sequential -i test_files/file_mp${mp}_nr${nr}.pms -o test_files/file_mp${mp}_nr${nr}_out.pms -v 0)
             echo "iteration=$i max_payload=$mp records_number=$nr"
             echo "$output"
             time_ms=$(echo "$output" | grep 'time(ms):' | awk -F ':' '{print $2}')
             echo "$i,$mp,$nr,$time_ms" >> "$output_file"
+            rm test_files/file_mp${mp}_nr${nr}_out.pms
         done
     done
 done

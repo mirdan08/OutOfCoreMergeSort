@@ -13,46 +13,54 @@ int main(int argc,char*argv[]){
     uint64_t records_num=0;
     size_t threads_num=0;
     bool verbose = false;
-    std::string filename="";
-    bool success=parse_cli_args(argc,argv,threads_num,verbose,filename);
+    std::string in_filename="";
+    std::string out_filename="";
+    size_t memory_limit=MAX_MEMORY_LIMIT;
+    bool success=parse_cli_args(argc,argv,threads_num,verbose,in_filename,out_filename,memory_limit);
     if(!success){
         std::cout << "Exiting..." << std::endl;
         return 1;
     }
-    if(filename==""){
-        std::cout << "please specify filename" << std::endl;
+    if(in_filename==""){
+        std::cout << "please specify the input file path" << std::endl;
+        return 1;
+    }
+    if(out_filename==""){
+        std::cout << "please specify the output file path" << std::endl;
         return 1;
     }
     auto start_time = std::chrono::high_resolution_clock::now();
-    
-    std::ifstream in_file(filename,std::ifstream::binary | std::ios::ate);
-    std::streamsize file_size= in_file.tellg();
-    in_file.seekg(0);
-    uint64_t max_file_payload_size;
-    in_file.read(reinterpret_cast<char*>(&max_file_payload_size),sizeof(uint64_t));    
-    if(max_file_payload_size != payload_max){
-        std::cout<< "error:the maximum payload size should correspond to " << payload_max << " but it isn't.\nExiting..." << std::endl;
-        in_file.close();
-        return 1;
+
+    std::vector<PosKeyPair> pos_key_data=read_records(in_filename,memory_limit);
+    if (verbose){
+        unsigned int i=0;
+        for(const auto& pkp:pos_key_data){
+            std::cout<< i++ << "\t[" << pkp.pos << ":" << pkp.key << "]" << std::endl;
+        }
     }
-    records_num=0;
-    in_file.read(reinterpret_cast<char*>(&records_num),sizeof(uint64_t));
-    
-    std::vector<uint64_t> offsets(records_num);
-    in_file.read(reinterpret_cast<char*>(offsets.data()),sizeof(uint64_t)*records_num);
-    std::cout << "starting with:\n" 
-              << "\tnumber of records:\t" << records_num 
-              << "\tmax payload size:\t" << max_file_payload_size << std::endl;
-    std::vector<PosKeyPair> pos_key_data;
-    read_payloads(
-        in_file,MAX_MEMORY_LIMIT,records_num,pos_key_data
-    );
     std::sort(
         pos_key_data.begin(),pos_key_data.end(),
         [](const PosKeyPair& a,const PosKeyPair& b){return a.key<b.key;}
     );
 
+    const unsigned int payload_header_size=sizeof(uint64_t)+sizeof(uint64_t);
+    std::ofstream out_file(out_filename,std::ofstream::binary);
+    std::ifstream in_file(in_filename,std::ofstream::binary);
+    char buffer[payload_max];
+    //Note: buffering cannot be applied as we don't know where the records are the be read from
+    //there is still a form of buffering in the ofstream library
+    for(int i=0;i<pos_key_data.size();i++){
+        in_file.seekg(pos_key_data[i].offset+payload_header_size);
+        in_file.read(buffer,pos_key_data[i].len);
+        out_file.write(reinterpret_cast<char*>(&pos_key_data[i].key),sizeof(uint64_t));
+        out_file.write(reinterpret_cast<char*>(&pos_key_data[i].len),sizeof(uint64_t));
+        out_file.write(buffer,pos_key_data[i].len);
+    }
+    in_file.close();
+    out_file.close();
+    delete[] buffer;
     if (verbose){
+        std::cout<< "done writing" << std::endl;
         unsigned int i=0;
         for(const auto& pkp:pos_key_data){
             std::cout<< i++ << "\t[" << pkp.pos << ":" << pkp.key << "]" << std::endl;

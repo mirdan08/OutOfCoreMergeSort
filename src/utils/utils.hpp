@@ -12,6 +12,15 @@
 #include <cstring>
 #include <vector>
 
-bool parse_cli_args(int argc,char*argv[],size_t& threads_num,bool& verbose,std::string& filename);
+std::vector<PosKeyPair> read_records(std::string& file_path,const unsigned long memory_limt);
 
-void read_payloads(std::ifstream& in_file,const unsigned long MAX_MEMORY_LIMIT,uint64_t records_num,std::vector<PosKeyPair>& pos_key_data);
+bool parse_cli_args(int argc,char*argv[],size_t& threads_num,bool& verbose,std::string& in_filename,std::string& out_filename,size_t& memory_limit);
+void read_payloads_chunk(
+    const std::string file_path,
+    const size_t start_offset,
+    const unsigned long memory_limit,
+    uint64_t records_num,
+    const size_t array_start,
+    const size_t array_end,
+    std::vector<PosKeyPair>& pos_key_data
+);
