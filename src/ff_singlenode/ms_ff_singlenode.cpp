@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 
 //initial sorter for mergesort
 struct SortingEmitter : public ff::ff_monode_t<int, IndexPair> {
@@ -145,12 +146,14 @@ int
     int num_workers;
     std::string out_filename;
     std::string in_filename;
+    size_t file_size;
     SubRangeCollector(int num_workers,PosKeyVec& data,PosKeyVec& result,std::string in_filename,std::string out_filename)
     :num_workers(num_workers),
     data(data),
     result(result),
     out_filename(out_filename),
-    in_filename(in_filename){};
+    in_filename(in_filename)
+    {};
 
     int* svc(PosKeyVec* task) {
         auto* merged_result = task;
@@ -166,30 +169,63 @@ int
                     return a->front().key < b->front().key;
                 }
             );
-            const unsigned int payload_header_size=sizeof(uint64_t)+sizeof(uint64_t);
+            std::ifstream in_file(in_filename,std::ifstream::binary | std::ifstream::ate);
+            size_t file_size= in_file.tellg();
+            in_file.close();
             std::ofstream out_file(out_filename,std::ofstream::binary);
-            std::ifstream in_file(in_filename,std::ofstream::binary);
-            char buffer[payload_max];
-            //Note: buffering cannot be applied as we don't know where the records are the be read from
-            //there is still a form of buffering in the ofstream library
+            out_file.seekp(file_size-1);
+            out_file.put(0);
+            out_file.close();
+            size_t byte_counter=0;
             for(const auto& range:sub_ranges){
+                auto* res=new std::pair(byte_counter,range);
+                ff_send_out(res);
                 for(auto& pkp:*range){
-                    in_file.seekg(pkp.offset+payload_header_size);
-                    in_file.read(buffer,pkp.len);
-                    out_file.write(reinterpret_cast<char*>(&pkp.key),sizeof(uint64_t));
-                    out_file.write(reinterpret_cast<char*>(&pkp.len),sizeof(uint64_t));
-                    out_file.write(buffer,pkp.len);
+                    byte_counter+=pkp.len+sizeof(uint64_t)+sizeof(uint64_t);
                 }
             }
-            in_file.close();
-            out_file.close();
-            //delete[] buffer;
             return EOS;
         }
         return GO_ON;
     }
     
 };
+
+struct FileWriter: ff::ff_minode_t<
+std::pair<size_t,PosKeyVec*>,
+int
+>{
+    size_t num_workers;
+    std::string out_filename;
+    std::string in_filename;
+    FileWriter(std::string in_filename,std::string out_filename,size_t num_workers):out_filename(out_filename),in_filename(in_filename),num_workers(num_workers){};
+    int* svc(std::pair<size_t,PosKeyVec*>* in){
+        size_t byte_offset=in->first;
+
+        PosKeyVec* merged_result=in->second;
+
+        int fd = open(out_filename.c_str(),O_RDWR);
+        if (fd < 0) {
+            perror("open");
+        }
+        std::ifstream in_file(in_filename,std::ofstream::binary);
+        char buffer[payload_max];
+        //Note: buffering cannot be applied as we don't know where the records are the be read from
+        //there is still a form of buffering in the ofstream library
+        for(auto& pkp:*merged_result){
+            in_file.seekg(pkp.offset+sizeof(uint64_t)+sizeof(uint64_t));
+            in_file.read(buffer,pkp.len);
+            pwrite(fd,&pkp.key,sizeof(pkp.key),byte_offset);
+            pwrite(fd,&pkp.len,sizeof(pkp.len),byte_offset+sizeof(pkp.key));
+            pwrite(fd,buffer,pkp.len,byte_offset+sizeof(pkp.key)+sizeof(pkp.len));
+            byte_offset+=sizeof(pkp.key)+sizeof(pkp.len)+pkp.len;
+        }
+        in_file.close();
+        close(fd);
+        return new int(byte_offset);
+    }
+};
+
 
 // ---- SelectEmitter: emits k values for pivot search ----
 struct SelectEmitter : ff::ff_node_t<int,int> {
@@ -249,10 +285,19 @@ void sort_with_ff(
     SubRangeCollector src(num_workers,data,result,in_filename,out_filename);
     subranges_sorting_farm.add_collector(&src);
 
+    ff::ff_farm writing_farm;
+
+    std::vector<ff::ff_node* > writer_worker;
+    for(int i=0;i<sorting_workers;i++){
+        writer_worker.push_back(new FileWriter(in_filename,out_filename,num_workers));
+    }
+    writing_farm.add_workers(writer_worker);
+
     ff::ff_pipeline pipeline;
     pipeline.add_stage(&sorting_farm);
     pipeline.add_stage(&ranking_farm);
     pipeline.add_stage(&subranges_sorting_farm);
+    pipeline.add_stage(&writing_farm);
     if(pipeline.run_and_wait_end()<0)
         std::cerr << "errors with the pipeline" << std::endl;
 
