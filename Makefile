@@ -1,11 +1,11 @@
 CXX        = g++
 MPICXX     = mpicxx 
 
-CXXFLAGS= -std=c++20
+CXXFLAGS= -std=c++20 -fopenmp
 
 INCLUDES   = -Iinclude/fastflow/ -Isrc/
 LDFLAGS    = -pthread -Wall -Wextra
-OPTFLAGS   = -O3 -ffast-math -DNDEBUG
+OPTFLAGS   = -ffast-math -O3 -ftree-vectorize
 
 RPAYLOAD_MAX = 32
 
@@ -38,7 +38,7 @@ ff_singlenode: $(FF_OBJ) $(CORE_OBJ) $(UTILS_OBJ)
 	$(CXX) $(CXXFLAGS) -DRPAYLOAD_MAX=$(RPAYLOAD_MAX) $(INCLUDES) $(OPTFLAGS) -o $@ $^ $(LDFLAGS)
 
 openmp_singlenode: $(OMP_OBJ) $(CORE_OBJ) $(UTILS_OBJ)
-	$(CXX) $(CXXFLAGS) -fopenmp -DRPAYLOAD_MAX=$(RPAYLOAD_MAX) $(INCLUDES) $(OPTFLAGS) -o $@ $^ $(LDFLAGS) 
+	$(CXX) $(CXXFLAGS) -DRPAYLOAD_MAX=$(RPAYLOAD_MAX) $(INCLUDES) $(OPTFLAGS) -o $@ $^ -fopenmp $(LDFLAGS) 
 payload_generator:utilities/payload_generator.cpp 
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(OPTFLAGS) -o utilities/$@ $^ $(LDFLAGS)
 
