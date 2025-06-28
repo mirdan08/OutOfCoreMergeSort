@@ -51,7 +51,6 @@ uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair> ranges, i
         size_t mid = candidates.size() / 2;
         std::nth_element(candidates.begin(), candidates.begin() + mid, candidates.end());
         uint64_t pivot = candidates[mid];
-
         int global_rank = 0;
         for (int i = 0; i < p; ++i) {
             size_t left = bounds[i].first;
@@ -69,6 +68,7 @@ uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair> ranges, i
                 
                 global_rank += it - subrange_begin;
             }
+            //std::cout << k << " global rank " << global_rank << std::endl;
             if (global_rank >= k) {
                 for (int i = 0; i < p; ++i) {
                     
@@ -76,7 +76,7 @@ uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair> ranges, i
                     size_t right = bounds[i].second +1;
                     auto subrange_begin = data.begin() + left;
                     auto subrange_end = data.begin() + right;
-
+                    
                     
                     auto it = std::upper_bound(
                         subrange_begin, subrange_end,
@@ -106,7 +106,7 @@ uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair> ranges, i
                             return val < elem.key;
                         }
                     );
-
+                    
                     auto offset=it-data.begin();
                     if(offset==0 || offset < bounds[i].first || it==subrange_end){
                         bounds[i].first=bounds[i].second;
