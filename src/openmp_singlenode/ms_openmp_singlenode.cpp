@@ -218,26 +218,51 @@ int main(int argc,char*argv[]){
         offsets[i]=byte_offset;
         byte_offset+=bytes_nums[i];
     }
-
-    #pragma omp parallel for shared(merged_ranges) shared(offsets) schedule(static)
-    for(int i=0;i<threads_num;i++){
-        size_t thread_offset=offsets[i];
-        int fd = open(out_filename.c_str(),O_RDWR);
+    const size_t payload_thread_max=memory_limit/threads_num;
+    
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < threads_num; ++i) {
+        size_t thread_offset = offsets[i];                  // Start of this thread's output region
+        const auto& pkp_list = merged_ranges[i];            // Sorted records for this thread
+        std::ifstream in_file(in_filename, std::ios::binary);
+        char* payload_buf=new char[payload_max];                      // Input record buffer
+        char* out_buf=new char[payload_thread_max];                   // Output write buffer
+        size_t out_pos = 0;                                 // Current write buffer position
+        
+        int fd = open(out_filename.c_str(), O_RDWR);
         if (fd < 0) {
             perror("open");
+            continue;
         }
-        std::ifstream in_file(in_filename,std::ofstream::binary);
-        char buffer[payload_max];
-        //Note: buffering cannot be applied as we don't know where the records are the be read from
-        //there is still a form of buffering in the ofstream library
-        for(auto& pkp:merged_ranges[i]){
-            in_file.seekg(pkp.offset+sizeof(uint64_t)+sizeof(uint64_t));
-            in_file.read(buffer,pkp.len);
-            pwrite(fd,&pkp.key,sizeof(pkp.key),thread_offset);
-            pwrite(fd,&pkp.len,sizeof(pkp.len),thread_offset+sizeof(pkp.key));
-            pwrite(fd,buffer,pkp.len,thread_offset+sizeof(pkp.key)+sizeof(pkp.len));
-            thread_offset+=sizeof(pkp.key)+sizeof(pkp.len)+pkp.len;
+
+        for (const auto& pkp : pkp_list) {
+            in_file.seekg(pkp.offset + sizeof(uint64_t) + sizeof(uint64_t));
+            in_file.read(payload_buf, pkp.len);
+            size_t record_size = sizeof(pkp.key) + sizeof(pkp.len) + pkp.len;
+            if (out_pos + record_size > payload_thread_max) {
+                ssize_t written = pwrite(fd, out_buf, out_pos, thread_offset);
+                if (written < 0) {
+                    perror("pwrite");
+                    break;
+                }
+                thread_offset += written;
+                out_pos = 0;
+            }
+            std::memcpy(out_buf + out_pos, &pkp.key, sizeof(pkp.key));
+            out_pos += sizeof(pkp.key);
+            std::memcpy(out_buf + out_pos, &pkp.len, sizeof(pkp.len));
+            out_pos += sizeof(pkp.len);
+            std::memcpy(out_buf + out_pos, payload_buf, pkp.len);
+            out_pos += pkp.len;
         }
+        if (out_pos > 0) {
+            ssize_t written = pwrite(fd, out_buf, out_pos, thread_offset);
+            if (written < 0) {
+                perror("pwrite");
+            }
+        }
+        delete out_buf;
+        delete payload_buf;
         in_file.close();
         close(fd);
     }
