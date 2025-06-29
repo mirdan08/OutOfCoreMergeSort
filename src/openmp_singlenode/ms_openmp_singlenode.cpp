@@ -12,15 +12,16 @@
 #include <omp.h>
 #include <fcntl.h>
 #include <queue>
+#include <numeric>
 
 using PosKeyVec=std::vector<PosKeyPair>;
 
 using IndexPair=std::pair<unsigned long,unsigned long>;
 using SortResult=std::tuple<unsigned long,unsigned long,unsigned long>;
 
-uint64_t ms_select2(const std::vector<PosKeyPair>& data,
+uint64_t  inline ms_select2(const std::vector<PosKeyPair>& data,
     const std::vector<std::pair<size_t, size_t>>& sorted_ranges,
-    size_t global_rank) {
+    size_t global_rank) noexcept {
     // Set initial binary search bounds for keys
     uint64_t low = std::numeric_limits<uint64_t>::min();
     uint64_t high = std::numeric_limits<uint64_t>::max();
@@ -30,7 +31,9 @@ uint64_t ms_select2(const std::vector<PosKeyPair>& data,
 
         // Estimate how many elements are ≤ mid across all sorted ranges
         size_t rank = 0;
-        for (const auto& [start, end] : sorted_ranges) {
+        for (size_t j=0;j<sorted_ranges.size();++j) {
+            const size_t start=sorted_ranges[j].first;
+            const size_t end=sorted_ranges[j].second;
             auto it = std::upper_bound(
             data.begin() + start, data.begin() + end, mid,
             [](uint64_t value, const PosKeyPair& elem) {
@@ -58,10 +61,10 @@ struct HeapNode {
         return key > other.key;
     }
 };
-std::vector<PosKeyPair> k_way_merge_heap(
+std::vector<PosKeyPair> inline k_way_merge_heap(
     const PosKeyVec& data,
     const std::vector<IndexPair>& subranges
-) {
+) noexcept {
     size_t k = subranges.size();
 
     // Min-heap: smallest key at top
@@ -72,8 +75,8 @@ std::vector<PosKeyPair> k_way_merge_heap(
     for (const auto& range : subranges) {
         total_size += (range.second - range.first);
     }
-    std::vector<PosKeyPair> merged;
-    merged.reserve(total_size);
+    std::vector<PosKeyPair> merged(total_size);
+    //merged.reserve(total_size);
 
     // Initialize the heap with the first element of each subrange (if not empty)
     for (size_t i = 0; i < k; ++i) {
@@ -83,13 +86,14 @@ std::vector<PosKeyPair> k_way_merge_heap(
             min_heap.push({data[start].key, i, start});
         }
     }
-
+    size_t i=0;
     // Extract-min and push next element from the same subrange until heap is empty
     while (!min_heap.empty()) {
         HeapNode current = min_heap.top();
         min_heap.pop();
 
-        merged.push_back(data[current.pos]);
+        merged[i]=data[current.pos];
+        ++i;
 
         size_t next_pos = current.pos + 1;
         size_t sub_i = current.subrange_idx;
@@ -101,7 +105,7 @@ std::vector<PosKeyPair> k_way_merge_heap(
     return merged;
 }
 
-void radix_sort_by_key(PosKeyVec& data) {
+void inline radix_sort_by_key(PosKeyVec& data) noexcept {
     constexpr size_t num_bytes = sizeof(uint64_t); // 8 bytes for uint64_t
     constexpr size_t radix = 256;  // 8-bit radix per pass
     const size_t n = data.size();
@@ -112,8 +116,8 @@ void radix_sort_by_key(PosKeyVec& data) {
         size_t count[radix] = {0};
         
         // Histogram the byte values
-        for (const auto& pkp : data) {
-            uint8_t val = (pkp.key >> (byte * 8)) & 0xFF;
+        for (size_t j=0;j<data.size();++j) {
+            uint8_t val = (data[j].key >> (byte * 8)) & 0xFF;
             count[val]++;
         }
         
@@ -124,9 +128,9 @@ void radix_sort_by_key(PosKeyVec& data) {
         offset[i] = offset[i - 1] + count[i - 1];
         
         // Place elements into buffer
-        for (const auto& pkp : data) {
-            uint8_t val = (pkp.key >> (byte * 8)) & 0xFF;
-            buffer[offset[val]++] = pkp;
+        for (size_t j=0;j<data.size();++j) {
+            uint8_t val = (data[j].key >> (byte * 8)) & 0xFF;
+            buffer[offset[val]++] = data[j];
         }
         
         // Swap buffers
@@ -134,58 +138,14 @@ void radix_sort_by_key(PosKeyVec& data) {
     }
 }
 
-void radix_sort_slice(PosKeyVec& data, size_t start, size_t end) {
+void inline radix_sort_slice(PosKeyVec& data, size_t start, size_t end) noexcept {
     PosKeyVec slice(data.begin() + start, data.begin() + end);
     radix_sort_by_key(slice);
     std::copy(slice.begin(), slice.end(), data.begin() + start);
 }
 
-void radix_sort_by_key_range(PosKeyVec& data, size_t start, size_t end) {
-    constexpr size_t num_bytes = sizeof(uint64_t); // 8 bytes for uint64_t
-    constexpr size_t radix = 256;                  // 8-bit radix per pass
 
-    const size_t n = end - start;
-    if (n <= 1) return;
-
-    PosKeyVec buffer(n);
-    bool from_data = true;
-
-    for (size_t byte = 0; byte < num_bytes; ++byte) {
-        size_t count[radix] = {0};
-
-        // Histogram
-        for (size_t i = 0; i < n; ++i) {
-            const auto& pkp = from_data ? data[start + i] : buffer[i];
-            uint8_t val = (pkp.key >> (byte * 8)) & 0xFF;
-            count[val]++;
-        }
-
-        // Prefix sum
-        size_t offset[radix];
-        offset[0] = 0;
-        for (size_t i = 1; i < radix; ++i)
-            offset[i] = offset[i - 1] + count[i - 1];
-
-        // Distribute into buffer
-        for (size_t i = 0; i < n; ++i) {
-            const auto& pkp = from_data ? data[start + i] : buffer[i];
-            uint8_t val = (pkp.key >> (byte * 8)) & 0xFF;
-            (from_data ? buffer : data)[offset[val]++] = pkp;
-        }
-
-        from_data = !from_data;
-    }
-
-    // Final copy back if needed
-    if (!from_data) {
-        for (size_t i = 0; i < n; ++i) {
-            data[start + i] = buffer[i];
-        }
-    }
-}
-
-
-int main(int argc,char*argv[]){
+int main(int argc,char*argv[]) noexcept{
     uint64_t records_num=0;
     size_t threads_num=0;
     bool verbose = false;
@@ -231,10 +191,6 @@ int main(int argc,char*argv[]){
     for(int i=0;i<threads_num;i++){
         const int start=sorted_ranges[i].first;
         const int end=sorted_ranges[i].second;
-        //std::sort(
-        //    pos_key_data.begin()+start,pos_key_data.begin()+end,
-        //    [](const PosKeyPair& a,const PosKeyPair& b){return a.key<b.key;}
-        //);
         radix_sort_slice(pos_key_data,start,end);
     }
 
@@ -248,7 +204,10 @@ int main(int argc,char*argv[]){
     }
     
     std::vector<std::vector<IndexPair>> bucket_subranges(threads_num);
-    for (const auto& [start, end] : sorted_ranges) {
+    
+    for (size_t j=0;j<sorted_ranges.size();++j) {
+        const size_t start=sorted_ranges[j].first;
+        const size_t end=sorted_ranges[j].second;
         auto begin_it = pos_key_data.begin() + start;
         auto end_it = pos_key_data.begin() + end;
 
@@ -321,10 +280,10 @@ int main(int argc,char*argv[]){
             continue;
         }
 
-        for (const auto& pkp : pkp_list) {
-            in_file.seekg(pkp.offset + sizeof(uint64_t) + sizeof(uint64_t));
-            in_file.read(payload_buf, pkp.len);
-            size_t record_size = sizeof(pkp.key) + sizeof(pkp.len) + pkp.len;
+        for (size_t j=0;j<pkp_list.size();++j) {
+            in_file.seekg(pkp_list[j].offset + sizeof(uint64_t) + sizeof(uint64_t));
+            in_file.read(payload_buf, pkp_list[j].len);
+            size_t record_size = sizeof(pkp_list[j].key) + sizeof(pkp_list[j].len) + pkp_list[j].len;
             if (out_pos + record_size > payload_thread_max) {
                 ssize_t written = pwrite(fd, out_buf, out_pos, thread_offset);
                 if (written < 0) {
@@ -334,12 +293,12 @@ int main(int argc,char*argv[]){
                 thread_offset += written;
                 out_pos = 0;
             }
-            std::memcpy(out_buf + out_pos, &pkp.key, sizeof(pkp.key));
-            out_pos += sizeof(pkp.key);
-            std::memcpy(out_buf + out_pos, &pkp.len, sizeof(pkp.len));
-            out_pos += sizeof(pkp.len);
-            std::memcpy(out_buf + out_pos, payload_buf, pkp.len);
-            out_pos += pkp.len;
+            std::memcpy(out_buf + out_pos, &pkp_list[j].key, sizeof(pkp_list[j].key));
+            out_pos += sizeof(pkp_list[j].key);
+            std::memcpy(out_buf + out_pos, &pkp_list[j].len, sizeof(pkp_list[j].len));
+            out_pos += sizeof(pkp_list[j].len);
+            std::memcpy(out_buf + out_pos, payload_buf, pkp_list[j].len);
+            out_pos += pkp_list[j].len;
         }
         if (out_pos > 0) {
             ssize_t written = pwrite(fd, out_buf, out_pos, thread_offset);
