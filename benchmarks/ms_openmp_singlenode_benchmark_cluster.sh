@@ -1,10 +1,10 @@
 #!/bin/bash
 
 trials=5
-# 128b 1Gb 2Gb
-n_records=($((128)) $((1*1024*1024)) $((2*1024*1024)) $((3*1024*1024)) )
-# 64b 1Kb 1Mb
-max_payloads=( $((128)) $((1024)) )
+# 1Gb 2Gb
+n_records=($((1*1024*1024)) $((2*1024*1024)) )
+# 1kb 10kb 1Mb
+max_payloads=($((1024)) $((10*1024)) $((1024*1024))  )
 
 num_threads=(1 2 4 8 16 32)
 
@@ -38,8 +38,8 @@ for i in $(seq 1 $trials); do
         make openmp_singlenode RPAYLOAD_MAX=$mp
         for nr in "${n_records[@]}"; do
             for nt in "${num_threads[@]}"; do
-                output=$(./openmp_singlenode -i test_files/file_mp${mp}_nr${nr}.pms -o test_files/file_mp${mp}_nr${nr}_out.pms -t ${nt} -v 0)
-                echo "iteration=$i max_payload=$mp records_number=$nr  num_threads=$nt"
+                output=$(srun --time=00:5:00 ./openmp_singlenode -i test_files/file_mp${mp}_nr${nr}.pms -o test_files/file_mp${mp}_nr${nr}_out.pms -t ${nt} -v 0)
+                echo "iteration=$i max_payload=$mp records_number=$nr num_threads=$nt"
                 echo "$output"
                 time_ms=$(echo "$output" | grep 'time(ms):' | awk -F ':' '{print $2}')
                 echo "$i,$nt,$mp,$nr,$time_ms" >> "$output_file"

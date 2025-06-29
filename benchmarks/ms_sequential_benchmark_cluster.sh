@@ -2,9 +2,9 @@
 
 trials=5
 # 128b 1Gb 2Gb
-n_records=($((128)) $((1*1024*1024)) $((2*1024*1024)) )
+n_records=($((1*1024*1024)) $((2*1024*1024)) )
 # 1kb 10kb 10Mb
-max_payloads=($((1024)) $((1024*1024)) $((10*1024*1024))  )
+max_payloads=($((1024)) $((10*1024)) $((1024*1024))  )
 
 make cleanall
 make payload_generator
