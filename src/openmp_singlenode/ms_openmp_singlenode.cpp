@@ -101,6 +101,90 @@ std::vector<PosKeyPair> k_way_merge_heap(
     return merged;
 }
 
+void radix_sort_by_key(PosKeyVec& data) {
+    constexpr size_t num_bytes = sizeof(uint64_t); // 8 bytes for uint64_t
+    constexpr size_t radix = 256;  // 8-bit radix per pass
+    const size_t n = data.size();
+    
+    PosKeyVec buffer(n);
+    
+    for (size_t byte = 0; byte < num_bytes; ++byte) {
+        size_t count[radix] = {0};
+        
+        // Histogram the byte values
+        for (const auto& pkp : data) {
+            uint8_t val = (pkp.key >> (byte * 8)) & 0xFF;
+            count[val]++;
+        }
+        
+        // Compute prefix sum
+        size_t offset[radix];
+        offset[0] = 0;
+        for (size_t i = 1; i < radix; ++i)
+        offset[i] = offset[i - 1] + count[i - 1];
+        
+        // Place elements into buffer
+        for (const auto& pkp : data) {
+            uint8_t val = (pkp.key >> (byte * 8)) & 0xFF;
+            buffer[offset[val]++] = pkp;
+        }
+        
+        // Swap buffers
+        std::swap(data, buffer);
+    }
+}
+
+void radix_sort_slice(PosKeyVec& data, size_t start, size_t end) {
+    PosKeyVec slice(data.begin() + start, data.begin() + end);
+    radix_sort_by_key(slice);
+    std::copy(slice.begin(), slice.end(), data.begin() + start);
+}
+
+void radix_sort_by_key_range(PosKeyVec& data, size_t start, size_t end) {
+    constexpr size_t num_bytes = sizeof(uint64_t); // 8 bytes for uint64_t
+    constexpr size_t radix = 256;                  // 8-bit radix per pass
+
+    const size_t n = end - start;
+    if (n <= 1) return;
+
+    PosKeyVec buffer(n);
+    bool from_data = true;
+
+    for (size_t byte = 0; byte < num_bytes; ++byte) {
+        size_t count[radix] = {0};
+
+        // Histogram
+        for (size_t i = 0; i < n; ++i) {
+            const auto& pkp = from_data ? data[start + i] : buffer[i];
+            uint8_t val = (pkp.key >> (byte * 8)) & 0xFF;
+            count[val]++;
+        }
+
+        // Prefix sum
+        size_t offset[radix];
+        offset[0] = 0;
+        for (size_t i = 1; i < radix; ++i)
+            offset[i] = offset[i - 1] + count[i - 1];
+
+        // Distribute into buffer
+        for (size_t i = 0; i < n; ++i) {
+            const auto& pkp = from_data ? data[start + i] : buffer[i];
+            uint8_t val = (pkp.key >> (byte * 8)) & 0xFF;
+            (from_data ? buffer : data)[offset[val]++] = pkp;
+        }
+
+        from_data = !from_data;
+    }
+
+    // Final copy back if needed
+    if (!from_data) {
+        for (size_t i = 0; i < n; ++i) {
+            data[start + i] = buffer[i];
+        }
+    }
+}
+
+
 int main(int argc,char*argv[]){
     uint64_t records_num=0;
     size_t threads_num=0;
@@ -147,13 +231,14 @@ int main(int argc,char*argv[]){
     for(int i=0;i<threads_num;i++){
         const int start=sorted_ranges[i].first;
         const int end=sorted_ranges[i].second;
-        std::sort(
-            pos_key_data.begin()+start,pos_key_data.begin()+end,
-            [](const PosKeyPair& a,const PosKeyPair& b){return a.key<b.key;}
-        );
+        //std::sort(
+        //    pos_key_data.begin()+start,pos_key_data.begin()+end,
+        //    [](const PosKeyPair& a,const PosKeyPair& b){return a.key<b.key;}
+        //);
+        radix_sort_slice(pos_key_data,start,end);
     }
+
     // estimating  the ranks using ms_select
-    
     std::vector<uint64_t> pivots(threads_num-1);
     
     #pragma omp parallel for shared(pivots) shared(sorted_ranges) schedule(static)
@@ -225,6 +310,7 @@ int main(int argc,char*argv[]){
         size_t thread_offset = offsets[i];                  // Start of this thread's output region
         const auto& pkp_list = merged_ranges[i];            // Sorted records for this thread
         std::ifstream in_file(in_filename, std::ios::binary);
+        
         char* payload_buf=new char[payload_max];                      // Input record buffer
         char* out_buf=new char[payload_thread_max];                   // Output write buffer
         size_t out_pos = 0;                                 // Current write buffer position
