@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <unistd.h>
+#include <fcntl.h>
 
 int main(int argc,char*argv[]){
     uint64_t records_num=0;
@@ -45,19 +47,48 @@ int main(int argc,char*argv[]){
 
     const unsigned int payload_header_size=sizeof(uint64_t)+sizeof(uint64_t);
     std::ofstream out_file(out_filename,std::ofstream::binary);
+
     std::ifstream in_file(in_filename,std::ofstream::binary);
-    char buffer[payload_max];
-    //Note: buffering cannot be applied as we don't know where the records are the be read from
-    //there is still a form of buffering in the ofstream library
-    for(int i=0;i<pos_key_data.size();i++){
-        in_file.seekg(pos_key_data[i].offset+payload_header_size);
-        in_file.read(buffer,pos_key_data[i].len);
-        out_file.write(reinterpret_cast<char*>(&pos_key_data[i].key),sizeof(uint64_t));
-        out_file.write(reinterpret_cast<char*>(&pos_key_data[i].len),sizeof(uint64_t));
-        out_file.write(buffer,pos_key_data[i].len);
+    
+    char* payload_buf=new char[payload_max];                      // Input record buffer
+    char* out_buf=new char[memory_limit];                   // Output write buffer
+    size_t out_pos = 0;                                 // Current write buffer position
+    
+    int fd = open(out_filename.c_str(), O_RDWR);
+    if (fd < 0) {
+        perror("open");
     }
+    size_t offset=0;
+    for (const auto& pkp : pos_key_data) {
+        in_file.seekg(pkp.offset + sizeof(uint64_t) + sizeof(uint64_t));
+        in_file.read(payload_buf, pkp.len);
+        size_t record_size = sizeof(pkp.key) + sizeof(pkp.len) + pkp.len;
+        if (out_pos + record_size > memory_limit) {
+            ssize_t written = pwrite(fd, out_buf, out_pos, offset);
+            if (written < 0) {
+                perror("pwrite");
+                break;
+            }
+            offset += written;
+            out_pos = 0;
+        }
+        std::memcpy(out_buf + out_pos, &pkp.key, sizeof(pkp.key));
+        out_pos += sizeof(pkp.key);
+        std::memcpy(out_buf + out_pos, &pkp.len, sizeof(pkp.len));
+        out_pos += sizeof(pkp.len);
+        std::memcpy(out_buf + out_pos, payload_buf, pkp.len);
+        out_pos += pkp.len;
+    }
+    if (out_pos > 0) {
+        ssize_t written = pwrite(fd, out_buf, out_pos, offset);
+        if (written < 0) {
+            perror("pwrite");
+        }
+    }
+    delete out_buf;
+    delete payload_buf;
     in_file.close();
-    out_file.close();
+    close(fd);
     //delete[] buffer;
     if (verbose){
         std::cout<< "done writing" << std::endl;
