@@ -24,6 +24,7 @@ struct Record {
     uint64_t key; 
     char payload[payload_max];
 };
+
 struct MemoryRecord{
     uint32_t len; 
     uint64_t key; 
