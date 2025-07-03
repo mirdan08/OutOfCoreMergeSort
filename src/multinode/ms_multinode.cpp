@@ -312,8 +312,8 @@ int main(int argc,char*argv[]) noexcept{
             int global_rank=i*(pos_key_data.size()/nprocs);
             global_pivots[i-1]=ms_select2(recvbuf,rank_sorted_ranges,global_rank);
         }
-        std::vector<std::vector<IndexPair>> global_bucket_subranges(threads_num);
-        std::vector<std::vector<size_t>> global_bucket_offsets(threads_num);
+        std::vector<std::vector<IndexPair>> global_bucket_subranges(nprocs);
+        std::vector<std::vector<size_t>> global_bucket_offsets(nprocs);
         
         size_t byte_size=0;
         for (size_t j=0;j<rank_sorted_ranges.size();++j) {
@@ -324,7 +324,7 @@ int main(int argc,char*argv[]) noexcept{
             
             size_t last_idx = start;
             
-            for (size_t b = 0; b < threads_num; ++b) {
+            for (size_t b = 0; b < nprocs; ++b) {
                 auto low = recvbuf.begin() + last_idx;
                 
                 auto high = (b < pivots.size())
@@ -356,37 +356,38 @@ int main(int argc,char*argv[]) noexcept{
         out_file.close();
         // accumulate the bytes
         //will be used later to parallelize file writing
-        for(int i=0;i<global_bucket_subranges.size();i++){
-            for(int j=1;j<global_bucket_subranges[i].size();j++){
+        for(int i=1;i<global_bucket_subranges.size();i++){
+            for(int j=0;j<global_bucket_subranges[i].size();j++){
                 size_t count=global_bucket_subranges[i][j].second-global_bucket_subranges[i][j].first;
                 size_t offset=global_bucket_offsets[i][j];
+                std::cout<< i << "-" << j << std::endl;
                 // send offset for the file,the number of values
                 // and the actual data to reference the original file
                 MPI_Send( 
                     &offset , 1 , MPI_UINT64_T, 
-                    j , i , MPI_COMM_WORLD
+                    i , i , MPI_COMM_WORLD
                 );
                 MPI_Send( 
                     &count , 1 , MPI_UINT64_T, 
-                    j , i , MPI_COMM_WORLD
+                    i , i , MPI_COMM_WORLD
                 );
                 MPI_Send(
                     recvbuf.data()+global_bucket_subranges[i][j].first,count,pkp_type,
-                    j,i,MPI_COMM_WORLD
+                    i,i,MPI_COMM_WORLD
                 );
             }
         }
-        for(int i=0;i<global_bucket_subranges.size();i++){
-            size_t count=global_bucket_subranges[i][0].second-global_bucket_subranges[i][0].first;
-            offsets[i]=global_bucket_offsets[i][0];
+        for(int i=0;i<global_bucket_subranges[0].size();i++){
+            size_t count=global_bucket_subranges[0][i].second-global_bucket_subranges[0][i].first;
+            offsets[i]=global_bucket_offsets[0][i];
             final_data[i].resize(count);
             std::copy(
-                recvbuf.begin()+global_bucket_subranges[i][0].first,recvbuf.begin()+global_bucket_subranges[i][0].second,
+                recvbuf.begin()+global_bucket_subranges[0][i].first,recvbuf.begin()+global_bucket_subranges[0][i].second,
                 final_data[i].begin()
             );
         }
     }else{
-        for(int i=0;i<threads_num;i++){
+        for(int i=0;i<nprocs;i++){
             uint64_t count = 0;
             uint64_t byte_offset =0;
             MPI_Recv(&byte_offset, 1, MPI_UINT64_T, 0, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -397,9 +398,16 @@ int main(int argc,char*argv[]) noexcept{
             MPI_Recv(final_data[i].data(),count,pkp_type,0,MPI_ANY_TAG,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
         }
     }
-
-    for(int i=0;i<threads_num;i++){
-        std::cout<< rank << ">" << i << ":"<< final_data[i].size() << "="<<offsets[i] <<std::endl;
+    size_t max_key=0;
+    if(rank==2){
+        for(int i=0;i<nprocs;i++){
+            for(int j=0;j<final_data[i].size();j++){
+                max_key=std::max(max_key,final_data[i][j].key);
+                std::cout<< rank << "   " << final_data[i][j].key << std::endl;
+                
+            }
+        }
+        std::cout<< max_key << std::endl;
     }
     const size_t payload_thread_max=memory_limit/threads_num;
 
