@@ -293,7 +293,7 @@ int main(int argc,char*argv[]) noexcept{
         recvbuf.data(),sendcounts.data(),displs.data(),pkp_type,
         0,MPI_COMM_WORLD
     );
-
+    
     std::vector<uint64_t> offsets(threads_num);
     std::vector<PosKeyVec> final_data(threads_num);
     if(rank==0){
@@ -354,7 +354,6 @@ int main(int argc,char*argv[]) noexcept{
         out_file.seekp(file_size-1);
         out_file.put(0);
         out_file.close();
-        std::vector<uint64_t> offsets(threads_num);
         // accumulate the bytes
         //will be used later to parallelize file writing
         for(int i=0;i<global_bucket_subranges.size();i++){
@@ -393,9 +392,14 @@ int main(int argc,char*argv[]) noexcept{
             MPI_Recv(&byte_offset, 1, MPI_UINT64_T, 0, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             offsets[i]=byte_offset;
             MPI_Recv(&count, 1, MPI_UINT64_T, 0, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            
             final_data[i].resize(count);
             MPI_Recv(final_data[i].data(),count,pkp_type,0,MPI_ANY_TAG,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
         }
+    }
+
+    for(int i=0;i<threads_num;i++){
+        std::cout<< rank << ">" << i << ":"<< final_data[i].size() << "="<<offsets[i] <<std::endl;
     }
     const size_t payload_thread_max=memory_limit/threads_num;
 
