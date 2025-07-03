@@ -37,7 +37,7 @@ using PosKeyVec=std::vector<PosKeyPair>;
 using IndexPair=std::pair<unsigned long,unsigned long>;
 using SortResult=std::tuple<unsigned long,unsigned long,unsigned long>;
 
-uint64_t  inline ms_select2(const std::vector<PosKeyPair>& data,
+uint64_t ms_select2(const std::vector<PosKeyPair>& data,
     const std::vector<std::pair<size_t, size_t>>& sorted_ranges,
     size_t global_rank) noexcept {
     // Set initial binary search bounds for keys
@@ -79,7 +79,7 @@ struct HeapNode {
         return key > other.key;
     }
 };
-std::vector<PosKeyPair> inline k_way_merge_heap(
+std::vector<PosKeyPair> k_way_merge_heap(
     const PosKeyVec& data,
     const std::vector<IndexPair>& subranges
 ) noexcept {
@@ -123,7 +123,7 @@ std::vector<PosKeyPair> inline k_way_merge_heap(
     return merged;
 }
 
-void inline radix_sort_by_key(PosKeyVec& data) noexcept {
+void radix_sort_by_key(PosKeyVec& data) noexcept {
     constexpr size_t num_bytes = sizeof(uint64_t); // 8 bytes for uint64_t
     constexpr size_t radix = 256;  // 8-bit radix per pass
     const size_t n = data.size();
@@ -156,7 +156,7 @@ void inline radix_sort_by_key(PosKeyVec& data) noexcept {
     }
 }
 
-void inline radix_sort_slice(PosKeyVec& data, size_t start, size_t end) noexcept {
+void radix_sort_slice(PosKeyVec& data, size_t start, size_t end) noexcept {
     PosKeyVec slice(data.begin() + start, data.begin() + end);
     radix_sort_by_key(slice);
     std::copy(slice.begin(), slice.end(), data.begin() + start);
@@ -294,8 +294,8 @@ int main(int argc,char*argv[]) noexcept{
         0,MPI_COMM_WORLD
     );
 
-    std::vector<uint64_t> offsets(nprocs);
-    std::vector<PosKeyVec> final_data(nprocs);
+    std::vector<uint64_t> offsets(threads_num);
+    std::vector<PosKeyVec> final_data(threads_num);
     if(rank==0){
 
         // estimating  the ranks using ms_select
@@ -354,43 +354,37 @@ int main(int argc,char*argv[]) noexcept{
         out_file.seekp(file_size-1);
         out_file.put(0);
         out_file.close();
-        std::vector<size_t> offsets(nprocs,0);
+        std::vector<uint64_t> offsets(threads_num);
         // accumulate the bytes
         //will be used later to parallelize file writing
-        std::cout<< global_bucket_subranges.size() << std::endl;
         for(int i=0;i<global_bucket_subranges.size();i++){
-            std::cout << global_bucket_subranges[i].size() << std::endl;
             for(int j=1;j<global_bucket_subranges[i].size();j++){
                 size_t count=global_bucket_subranges[i][j].second-global_bucket_subranges[i][j].first;
                 size_t offset=global_bucket_offsets[i][j];
-                std::cout<< i << "vv"<< j << std::endl;
                 // send offset for the file,the number of values
                 // and the actual data to reference the original file
                 MPI_Send( 
                     &offset , 1 , MPI_UINT64_T, 
                     j , i , MPI_COMM_WORLD
                 );
-                std::cout<< i << "--" << j << std::endl;
                 MPI_Send( 
                     &count , 1 , MPI_UINT64_T, 
                     j , i , MPI_COMM_WORLD
                 );
-                std::cout<< i << "==" << j << std::endl;
-                std::cout<< "sending " << global_bucket_subranges[i][j].first << " with "<<  count<< std::endl;
                 MPI_Send(
-                    recvbuf.data()+global_bucket_subranges[i][j].first,
-                    count,
-                    pkp_type,
+                    recvbuf.data()+global_bucket_subranges[i][j].first,count,pkp_type,
                     j,i,MPI_COMM_WORLD
                 );
-                std::cout<< i << "oo" << j << std::endl;
             }
-            std::cout<< "<<<" << i << std::endl;
         }
         for(int i=0;i<global_bucket_subranges.size();i++){
             size_t count=global_bucket_subranges[i][0].second-global_bucket_subranges[i][0].first;
             offsets[i]=global_bucket_offsets[i][0];
-            std::copy(final_data[i].begin(),recvbuf.begin()+global_bucket_subranges[i][0].first,recvbuf.begin()+global_bucket_subranges[i][0].second);
+            final_data[i].resize(count);
+            std::copy(
+                recvbuf.begin()+global_bucket_subranges[i][0].first,recvbuf.begin()+global_bucket_subranges[i][0].second,
+                final_data[i].begin()
+            );
         }
     }else{
         for(int i=0;i<threads_num;i++){
@@ -400,14 +394,12 @@ int main(int argc,char*argv[]) noexcept{
             offsets[i]=byte_offset;
             MPI_Recv(&count, 1, MPI_UINT64_T, 0, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             final_data[i].resize(count);
-            std::cout<< rank << "will receive" << count <<"of" << i << std::endl;
             MPI_Recv(final_data[i].data(),count,pkp_type,0,MPI_ANY_TAG,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
         }
-        std::cout<< rank << "is done" << std::endl;
     }
     const size_t payload_thread_max=memory_limit/threads_num;
 
-    #pragma omp parallel for schedule(static)
+    #pragma omp parallel for schedule(static) shared(final_data,offsets)
     for (int i = 0; i < threads_num; ++i) {
         size_t thread_offset = offsets[i];                  // Start of this thread's output region
         const auto& pkp_list = final_data[i];            // Sorted records for this thread
@@ -422,7 +414,7 @@ int main(int argc,char*argv[]) noexcept{
             perror("open");
             continue;
         }
-
+        
         for (size_t j=0;j<pkp_list.size();++j) {
             in_file.seekg(pkp_list[j].offset + sizeof(uint64_t) + sizeof(uint64_t));
             in_file.read(payload_buf, pkp_list[j].len);
@@ -453,15 +445,14 @@ int main(int argc,char*argv[]) noexcept{
         delete payload_buf;
         in_file.close();
         close(fd);
-
     }
-
-
+    //MPI_Barrier(MPI_COMM_WORLD); // Ensure all ranks done
     MPI_Type_free(&pkp_type);
     MPI_Finalize();
-    auto end_time = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-    std::cout << "time(ms):" << duration.count() << std::endl;
-
+    if(rank==0){
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+        std::cout << "time(ms):" << duration.count() << std::endl;
+    }   
     return 0;
 }
