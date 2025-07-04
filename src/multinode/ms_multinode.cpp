@@ -416,12 +416,14 @@ int main(int argc,char*argv[]) noexcept{
             MPI_Recv(final_data[i].data(),count,pkp_type,0,MPI_ANY_TAG,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
         }
     }
-
-
     const size_t payload_thread_max=memory_limit/threads_num;
+
     std::vector<PosKeyPair> rank_result;
-    for(int i=0;final_data.size();++i){
-        rank_result.insert(rank_result.end(),final_data[i].begin(),final_data[i].end());
+
+    for(int i=0;i<nprocs;++i){
+        for(const auto& pkp:final_data[i]){
+            rank_result.push_back(pkp);
+        }
     }
     std::vector<IndexPair> pairs(final_data.size());
     size_t offset_acc=0;
@@ -436,6 +438,7 @@ int main(int argc,char*argv[]) noexcept{
         file_pivots[i-1]=ms_select2(rank_result,pairs,desired_rank);
     }
 
+    
     std::vector<std::vector<IndexPair>> rank_bucket_subranges(threads_num);
     
     for (size_t j=0;j<pairs.size();++j) {
@@ -465,7 +468,7 @@ int main(int argc,char*argv[]) noexcept{
         }
         
     }
-    
+
     std::vector<PosKeyVec> sorted_merged_ranges(threads_num);
     std::vector<size_t> bytes_nums(threads_num);
     const unsigned int payload_header_size=sizeof(uint64_t)+sizeof(uint64_t);
