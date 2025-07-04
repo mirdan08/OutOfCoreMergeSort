@@ -17,11 +17,13 @@ CORE_SRC   = src/core/core.cpp
 SEQ_SRC    = src/sequential/ms_sequential.cpp
 FF_SRC 	   = src/ff_singlenode/ms_ff_singlenode.cpp
 OMP_SRC    = src/openmp_singlenode/ms_openmp_singlenode.cpp
+MPI_SRC    = src/multinode/ms_multinode.cpp
 UTILS_SRC  = src/utils/utils.cpp
 # Object files
 CORE_OBJ = $(CORE_SRC:.cpp=.o)
 FF_OBJ = $(FF_SRC:.cpp=.o)
 OMP_OBJ = $(OMP_SRC:.cpp=.o)
+MPI_OBJ = $(MPI_SRC:.cpp=.o)
 UTILS_OBJ = $(UTILS_SRC:.cpp=.o)
 SEQ_OBJ = $(SEQ_SRC:.cpp=.o)
 
@@ -39,6 +41,9 @@ ff_singlenode: $(FF_OBJ) $(CORE_OBJ) $(UTILS_OBJ)
 
 openmp_singlenode: $(OMP_OBJ) $(CORE_OBJ) $(UTILS_OBJ)
 	$(CXX) $(CXXFLAGS) -DRPAYLOAD_MAX=$(RPAYLOAD_MAX) $(INCLUDES) $(OPTFLAGS) -o $@ $^ -fopenmp $(LDFLAGS) 
+
+mpi_multinode: $(MPI_OBJ) $(CORE_OBJ) $(UTILS_OBJ)
+	$(MPICXX) $(CXXFLAGS) -DRPAYLOAD_MAX=$(RPAYLOAD_MAX) $(INCLUDES) $(OPTFLAGS) -o $@ $^ -fopenmp $(LDFLAGS) 
 payload_generator:utilities/payload_generator.cpp 
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(OPTFLAGS) -o utilities/$@ $^ $(LDFLAGS)
 

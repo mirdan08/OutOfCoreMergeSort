@@ -294,8 +294,9 @@ int main(int argc,char*argv[]) noexcept{
         0,MPI_COMM_WORLD
     );
     
-    std::vector<uint64_t> offsets(threads_num);
+    std::vector<uint64_t> buckets_bytes(threads_num);
     std::vector<PosKeyVec> final_data(threads_num);
+    uint64_t rank_offset;
     if(rank==0){
 
         // estimating  the ranks using ms_select
@@ -313,9 +314,8 @@ int main(int argc,char*argv[]) noexcept{
             global_pivots[i-1]=ms_select2(recvbuf,rank_sorted_ranges,global_rank);
         }
         std::vector<std::vector<IndexPair>> global_bucket_subranges(nprocs);
-        std::vector<std::vector<size_t>> global_bucket_offsets(nprocs);
+        std::vector<std::vector<size_t>> global_buckets_bytes(nprocs);
         
-        size_t byte_size=0;
         for (size_t j=0;j<rank_sorted_ranges.size();++j) {
             const size_t start=rank_sorted_ranges[j].first;
             const size_t end=rank_sorted_ranges[j].second;
@@ -333,14 +333,15 @@ int main(int argc,char*argv[]) noexcept{
                         return val < elem.key;
                     })
                     : end_it;
-                
-                if (low < high) {
-                    global_bucket_subranges[b].emplace_back(low - recvbuf.begin(), high - recvbuf.begin());
-                    const auto& last_pair=global_bucket_subranges[b].back();
-                    global_bucket_offsets[b].emplace_back(byte_size);
-                    for(size_t j=last_pair.first;j<last_pair.second;j++){
-                        byte_size+=recvbuf[j].len+sizeof(uint64_t)+sizeof(uint64_t);
-                    }
+                    
+                    if (low < high) {
+                        global_bucket_subranges[b].emplace_back(low - recvbuf.begin(), high - recvbuf.begin());
+                        const auto& last_pair=global_bucket_subranges[b].back();
+                        size_t byte_size=0;
+                        for(size_t j=last_pair.first;j<last_pair.second;j++){
+                            byte_size+=recvbuf[j].len+sizeof(uint64_t)+sizeof(uint64_t);
+                        }
+                        global_buckets_bytes[b].emplace_back(byte_size);
                 }
                 last_idx = high - recvbuf.begin();
                 if (last_idx >= end) break;
@@ -356,15 +357,32 @@ int main(int argc,char*argv[]) noexcept{
         out_file.close();
         // accumulate the bytes
         //will be used later to parallelize file writing
+        std::vector<uint64_t> offsets(nprocs);
+        uint64_t byte_count=0;
+        for(int i=0;i<global_bucket_subranges.size();i++){
+            offsets[i]=byte_count;
+            for(int j=0;j<global_bucket_subranges[i].size();j++){
+                size_t bytes=global_buckets_bytes[i][j];
+                byte_count+=bytes;
+            }
+        }
+        for(int i=1;i<nprocs;i++){
+            MPI_Send( 
+                &offsets[i] , 1 , MPI_UINT64_T, 
+                i , i , MPI_COMM_WORLD
+            );
+        }
+
+        rank_offset=offsets[0];
+
         for(int i=1;i<global_bucket_subranges.size();i++){
             for(int j=0;j<global_bucket_subranges[i].size();j++){
                 size_t count=global_bucket_subranges[i][j].second-global_bucket_subranges[i][j].first;
-                size_t offset=global_bucket_offsets[i][j];
-                std::cout<< i << "-" << j << std::endl;
+                size_t bytes=global_buckets_bytes[i][j];
                 // send offset for the file,the number of values
                 // and the actual data to reference the original file
                 MPI_Send( 
-                    &offset , 1 , MPI_UINT64_T, 
+                    &bytes , 1 , MPI_UINT64_T, 
                     i , i , MPI_COMM_WORLD
                 );
                 MPI_Send( 
@@ -379,7 +397,7 @@ int main(int argc,char*argv[]) noexcept{
         }
         for(int i=0;i<global_bucket_subranges[0].size();i++){
             size_t count=global_bucket_subranges[0][i].second-global_bucket_subranges[0][i].first;
-            offsets[i]=global_bucket_offsets[0][i];
+            buckets_bytes[i]=global_buckets_bytes[0][i];
             final_data[i].resize(count);
             std::copy(
                 recvbuf.begin()+global_bucket_subranges[0][i].first,recvbuf.begin()+global_bucket_subranges[0][i].second,
@@ -387,34 +405,91 @@ int main(int argc,char*argv[]) noexcept{
             );
         }
     }else{
+        MPI_Recv(&rank_offset,1,MPI_UINT64_T,0,MPI_ANY_TAG,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
         for(int i=0;i<nprocs;i++){
             uint64_t count = 0;
-            uint64_t byte_offset =0;
-            MPI_Recv(&byte_offset, 1, MPI_UINT64_T, 0, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            offsets[i]=byte_offset;
+            uint64_t bucket_bytes =0;
+            MPI_Recv(&bucket_bytes, 1, MPI_UINT64_T, 0, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            buckets_bytes[i]=bucket_bytes;
             MPI_Recv(&count, 1, MPI_UINT64_T, 0, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            
             final_data[i].resize(count);
             MPI_Recv(final_data[i].data(),count,pkp_type,0,MPI_ANY_TAG,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
         }
     }
-    size_t max_key=0;
-    if(rank==2){
-        for(int i=0;i<nprocs;i++){
-            for(int j=0;j<final_data[i].size();j++){
-                max_key=std::max(max_key,final_data[i][j].key);
-                std::cout<< rank << "   " << final_data[i][j].key << std::endl;
-                
-            }
-        }
-        std::cout<< max_key << std::endl;
-    }
-    const size_t payload_thread_max=memory_limit/threads_num;
 
-    #pragma omp parallel for schedule(static) shared(final_data,offsets)
+
+    const size_t payload_thread_max=memory_limit/threads_num;
+    std::vector<PosKeyPair> rank_result;
+    for(int i=0;final_data.size();++i){
+        rank_result.insert(rank_result.end(),final_data[i].begin(),final_data[i].end());
+    }
+    std::vector<IndexPair> pairs(final_data.size());
+    size_t offset_acc=0;
+    for(int i=0;i<final_data.size();i++){
+        pairs.push_back(IndexPair(offset_acc,offset_acc+final_data[i].size()));
+        offset_acc+=final_data[i].size();
+    }
+    std::vector<uint64_t> file_pivots(threads_num-1);
+    #pragma omp parallel for shared(pivots) shared(sorted_ranges) schedule(static)
+    for(int i=1;i<=file_pivots.size();i++){
+        int desired_rank=i*(rank_result.size()/threads_num);
+        file_pivots[i-1]=ms_select2(rank_result,pairs,desired_rank);
+    }
+
+    std::vector<std::vector<IndexPair>> rank_bucket_subranges(threads_num);
+    
+    for (size_t j=0;j<pairs.size();++j) {
+        const size_t start=pairs[j].first;
+        const size_t end=pairs[j].second;
+        auto begin_it = rank_result.begin() + start;
+        auto end_it = rank_result.begin() + end;
+
+        size_t last_idx = start;
+
+        for (size_t b = 0; b < threads_num; ++b) {
+            auto low = rank_result.begin() + last_idx;
+            
+            auto high = (b < file_pivots.size())
+            ? std::upper_bound(low, end_it, file_pivots[b],
+                [](uint64_t val, const PosKeyPair& elem) {
+                    return val < elem.key;
+                })
+                : end_it;
+                
+            if (low < high) {
+                rank_bucket_subranges[b].emplace_back(low - rank_result.begin(), high - rank_result.begin());
+            }
+                
+            last_idx = high - rank_result.begin();
+            if (last_idx >= end) break;
+        }
+        
+    }
+    
+    std::vector<PosKeyVec> sorted_merged_ranges(threads_num);
+    std::vector<size_t> bytes_nums(threads_num);
+    const unsigned int payload_header_size=sizeof(uint64_t)+sizeof(uint64_t);
+    #pragma omp parallel for shared(rank_result) shared(pairs) schedule(static)
+    for(int i=0;i<threads_num;i++){
+            sorted_merged_ranges[i]=std::move(k_way_merge_heap(rank_result,rank_bucket_subranges[i]));
+            size_t local_bytes=0;
+            #pragma omp simd reduction(+:local_bytes)
+            for(size_t j=0;j<sorted_merged_ranges[i].size();j++){
+                local_bytes+=payload_header_size+sorted_merged_ranges[i][j].len;
+            }
+            bytes_nums[i]=local_bytes;
+    }
+    std::vector<size_t> offsets(threads_num);
+    size_t byte_offset=0;
+    for(int i=0;i<threads_num;i++){
+        offsets[i]=byte_offset+rank_offset;
+        byte_offset+=bytes_nums[i];
+    }
+
+    #pragma omp parallel for schedule(static) shared(sorted_merged_ranges)
     for (int i = 0; i < threads_num; ++i) {
-        size_t thread_offset = offsets[i];                  // Start of this thread's output region
-        const auto& pkp_list = final_data[i];            // Sorted records for this thread
+        size_t thread_offset = buckets_bytes[i];                  // Start of this thread's output region
+        const auto& pkp_list = sorted_merged_ranges[i];            // Sorted records for this thread
         std::ifstream in_file(in_filename, std::ios::binary);
         
         char* payload_buf=new char[payload_max];                      // Input record buffer
