@@ -238,8 +238,8 @@ int main(int argc,char*argv[]) noexcept{
         radix_sort_slice(local_data,start,end);
     }
 
-    // estimating  the ranks using ms_select
-    std::vector<uint64_t> pivots(threads_num-1);
+    // estimating  the ranks using 
+    std::vector<uint64_t> pivots(std::max(threads_num-1,1UL));
     
     #pragma omp parallel for shared(pivots) shared(sorted_ranges) schedule(static)
     for(int i=1;i<=pivots.size();i++){
@@ -293,8 +293,8 @@ int main(int argc,char*argv[]) noexcept{
         recvbuf.data(),sendcounts.data(),displs.data(),pkp_type,
         0,MPI_COMM_WORLD
     );
-    std::vector<uint64_t> buckets_bytes(threads_num);
-    std::vector<PosKeyVec> final_data(threads_num);
+    std::vector<uint64_t> buckets_bytes(nprocs);
+    std::vector<PosKeyVec> final_data(nprocs);
     uint64_t rank_offset;
     if(rank==0){
 
@@ -335,7 +335,7 @@ int main(int argc,char*argv[]) noexcept{
                     })
                     : end_it;
                     
-                    if (low < high) {
+                    if (low <= high) {
                         global_bucket_subranges[b].emplace_back(low - recvbuf.begin(), high - recvbuf.begin());
                         const auto& last_pair=global_bucket_subranges[b].back();
                         size_t byte_size=0;
@@ -444,7 +444,7 @@ int main(int argc,char*argv[]) noexcept{
         pairs.push_back(IndexPair(offset_acc,offset_acc+final_data[i].size()));
         offset_acc+=final_data[i].size();
     }
-    std::vector<uint64_t> file_pivots(threads_num-1);
+    std::vector<uint64_t> file_pivots(std::max(threads_num-1,1UL));
     #pragma omp parallel for shared(pivots) shared(sorted_ranges) schedule(static)
     for(int i=1;i<=file_pivots.size();i++){
         int desired_rank=i*(rank_result.size()/threads_num);
@@ -465,7 +465,7 @@ int main(int argc,char*argv[]) noexcept{
         for (size_t b = 0; b < threads_num; ++b) {
             auto low = rank_result.begin() + last_idx;
             
-            auto high = (b < file_pivots.size())    \
+            auto high = (b < file_pivots.size())   
             ? std::upper_bound(low, end_it, file_pivots[b],
                 [](uint64_t val, const PosKeyPair& elem) {
                     return val < elem.key;
