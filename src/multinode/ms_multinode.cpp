@@ -293,21 +293,22 @@ int main(int argc,char*argv[]) noexcept{
         recvbuf.data(),sendcounts.data(),displs.data(),pkp_type,
         0,MPI_COMM_WORLD
     );
-    
     std::vector<uint64_t> buckets_bytes(threads_num);
     std::vector<PosKeyVec> final_data(threads_num);
     uint64_t rank_offset;
     if(rank==0){
 
         // estimating  the ranks using ms_select
-        std::vector<uint64_t> global_pivots(nprocs);
+        std::vector<uint64_t> global_pivots(nprocs-1);
         
         std::vector<IndexPair> rank_sorted_ranges;
         
         rank_sorted_ranges.push_back(IndexPair(displs[nprocs-1],pos_key_data.size()));
         for(size_t i=1;i<nprocs;++i){
             rank_sorted_ranges.push_back(IndexPair(displs[i-1],displs[i]));
+
         }
+
         #pragma omp parallel for shared(pivots) shared(rank_sorted_ranges) schedule(static)
         for(int i=1;i<global_pivots.size();i++){
             int global_rank=i*(pos_key_data.size()/nprocs);
@@ -327,8 +328,8 @@ int main(int argc,char*argv[]) noexcept{
             for (size_t b = 0; b < nprocs; ++b) {
                 auto low = recvbuf.begin() + last_idx;
                 
-                auto high = (b < pivots.size())
-                ? std::upper_bound(low, end_it, pivots[b],
+                auto high = (b < global_pivots.size())
+                ? std::upper_bound(low, end_it, global_pivots[b],
                     [](uint64_t val, const PosKeyPair& elem) {
                         return val < elem.key;
                     })
@@ -346,7 +347,6 @@ int main(int argc,char*argv[]) noexcept{
                 last_idx = high - recvbuf.begin();
                 if (last_idx >= end) break;
             }
-    
         }
         std::ifstream in_file(in_filename,std::ifstream::binary | std::ifstream::ate);
         size_t file_size= in_file.tellg();
@@ -376,6 +376,7 @@ int main(int argc,char*argv[]) noexcept{
         rank_offset=offsets[0];
 
         for(int i=1;i<global_bucket_subranges.size();i++){
+
             for(int j=0;j<global_bucket_subranges[i].size();j++){
                 size_t count=global_bucket_subranges[i][j].second-global_bucket_subranges[i][j].first;
                 size_t bytes=global_buckets_bytes[i][j];
@@ -394,6 +395,17 @@ int main(int argc,char*argv[]) noexcept{
                     i,i,MPI_COMM_WORLD
                 );
             }
+
+            if(global_buckets_bytes[i].size()==0){
+                for(int j=0;j<nprocs;j++){
+                    size_t bytes=0;
+                    MPI_Send( 
+                        &bytes , 1 , MPI_UINT64_T, 
+                        i , i , MPI_COMM_WORLD
+                    );
+
+                }
+            }
         }
         for(int i=0;i<global_bucket_subranges[0].size();i++){
             size_t count=global_bucket_subranges[0][i].second-global_bucket_subranges[0][i].first;
@@ -410,6 +422,7 @@ int main(int argc,char*argv[]) noexcept{
             uint64_t count = 0;
             uint64_t bucket_bytes =0;
             MPI_Recv(&bucket_bytes, 1, MPI_UINT64_T, 0, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            if(bucket_bytes==0) continue;
             buckets_bytes[i]=bucket_bytes;
             MPI_Recv(&count, 1, MPI_UINT64_T, 0, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             final_data[i].resize(count);
@@ -419,12 +432,12 @@ int main(int argc,char*argv[]) noexcept{
     const size_t payload_thread_max=memory_limit/threads_num;
 
     std::vector<PosKeyPair> rank_result;
-
     for(int i=0;i<nprocs;++i){
         for(const auto& pkp:final_data[i]){
             rank_result.push_back(pkp);
         }
     }
+
     std::vector<IndexPair> pairs(final_data.size());
     size_t offset_acc=0;
     for(int i=0;i<final_data.size();i++){
@@ -452,7 +465,7 @@ int main(int argc,char*argv[]) noexcept{
         for (size_t b = 0; b < threads_num; ++b) {
             auto low = rank_result.begin() + last_idx;
             
-            auto high = (b < file_pivots.size())
+            auto high = (b < file_pivots.size())    \
             ? std::upper_bound(low, end_it, file_pivots[b],
                 [](uint64_t val, const PosKeyPair& elem) {
                     return val < elem.key;
@@ -480,7 +493,7 @@ int main(int argc,char*argv[]) noexcept{
             for(size_t j=0;j<sorted_merged_ranges[i].size();j++){
                 local_bytes+=payload_header_size+sorted_merged_ranges[i][j].len;
             }
-            bytes_nums[i]=local_bytes;
+            bytes_nums[i]=local_bytes; 
     }
     std::vector<size_t> offsets(threads_num);
     size_t byte_offset=0;
@@ -489,9 +502,11 @@ int main(int argc,char*argv[]) noexcept{
         byte_offset+=bytes_nums[i];
     }
 
+
+
     #pragma omp parallel for schedule(static) shared(sorted_merged_ranges)
     for (int i = 0; i < threads_num; ++i) {
-        size_t thread_offset = buckets_bytes[i];                  // Start of this thread's output region
+        size_t thread_offset = offsets[i];                  // Start of this thread's output region
         const auto& pkp_list = sorted_merged_ranges[i];            // Sorted records for this thread
         std::ifstream in_file(in_filename, std::ios::binary);
         
@@ -525,6 +540,7 @@ int main(int argc,char*argv[]) noexcept{
             std::memcpy(out_buf + out_pos, payload_buf, pkp_list[j].len);
             out_pos += pkp_list[j].len;
         }
+        
         if (out_pos > 0) {
             ssize_t written = pwrite(fd, out_buf, out_pos, thread_offset);
             if (written < 0) {
