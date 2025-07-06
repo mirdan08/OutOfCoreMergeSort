@@ -15,6 +15,7 @@
 #include <queue>
 #include <numeric>
 #include <mpi.h>
+
 MPI_Datatype create_poskeypair_type() {
     MPI_Datatype type;
     int lengths[4] = {1, 1, 1, 1};
@@ -186,11 +187,7 @@ int main(int argc,char*argv[]) noexcept{
         pivots[i-1]=ms_select2(local_data,sorted_ranges,desired_rank);
     }
     
-    std::vector<std::vector<IndexPair>> bucket_subranges(threads_num);
-    for(int i=0;i<bucket_subranges.size();i++){
-        bucket_subranges[i].resize(threads_num);
-    }
-    
+    std::vector<std::vector<IndexPair>> bucket_subranges(threads_num,std::vector<IndexPair>(threads_num));
     #pragma omp parallel for schedule(static) shared(bucket_subranges)
     for (size_t j=0;j<sorted_ranges.size();++j) {
         const size_t start=sorted_ranges[j].first;
@@ -223,7 +220,7 @@ int main(int argc,char*argv[]) noexcept{
     std::vector<PosKeyVec> final_data(nprocs);
     uint64_t rank_offset;
     if(rank==0){
-        // estimating  the ranks using ms_select
+        
         std::vector<uint64_t> global_pivots(std::max(nprocs-1,1));
         
         std::vector<IndexPair> rank_sorted_ranges;
@@ -239,17 +236,13 @@ int main(int argc,char*argv[]) noexcept{
             int global_rank=i*(pos_key_data.size()/nprocs);
             global_pivots[i-1]=ms_select2(recvbuf,rank_sorted_ranges,global_rank);
         }
+        //cover edge case with only one rank
         if(global_pivots.size()==1){
             global_pivots[0]=ms_select2(recvbuf,rank_sorted_ranges,pos_key_data.size());
         }
-        std::vector<std::vector<IndexPair>> global_bucket_subranges(nprocs);
-        for(int j=0;j<global_bucket_subranges.size();j++){
-            global_bucket_subranges[j].resize(nprocs);
-        }
-        std::vector<std::vector<size_t>> global_buckets_bytes(nprocs);
-        for(int j=0;j<global_buckets_bytes.size();j++){
-            global_buckets_bytes[j].resize(nprocs);
-        }
+        std::vector<std::vector<IndexPair>> global_bucket_subranges(nprocs,std::vector<IndexPair>(nprocs));
+        std::vector<std::vector<size_t>> global_buckets_bytes(nprocs,std::vector<size_t>(nprocs));
+
         #pragma omp parallel for shared(global_bucket_subranges,global_buckets_bytes) schedule(static)
         for (size_t j=0;j<rank_sorted_ranges.size();++j) {
             const size_t start=rank_sorted_ranges[j].first;
@@ -385,10 +378,7 @@ int main(int argc,char*argv[]) noexcept{
     }
 
     
-    std::vector<std::vector<IndexPair>> rank_bucket_subranges(threads_num);
-    for(int j=0;j<rank_bucket_subranges.size();j++){
-        rank_bucket_subranges[j].resize(pairs.size());
-    }
+    std::vector<std::vector<IndexPair>> rank_bucket_subranges(threads_num,std::vector<IndexPair>(pairs.size()));
 
     #pragma omp parallel for shared(rank_bucket_subranges)
     for (size_t j=0;j<pairs.size();++j) {
@@ -432,6 +422,6 @@ int main(int argc,char*argv[]) noexcept{
         auto end_time = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
         std::cout << "time(ms):" << duration.count() << std::endl;
-    }   
+    }
     return 0;
 }
