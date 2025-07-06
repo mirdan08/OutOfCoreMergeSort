@@ -5,7 +5,7 @@
 #include <fstream>
 #include <cstring>
 #include <cassert>
-
+#include <queue>
 
 Record* read_record(std::ifstream& in_file){
     auto r=std::make_unique<Record>();
@@ -163,4 +163,134 @@ std::vector<PosKeyPair> k_way_merge_from_ranges(
         positions[min_idx]++;
     }
     return merged;
+}
+using PosKeyVec=std::vector<PosKeyPair>;
+
+using IndexPair=std::pair<unsigned long,unsigned long>;
+using SortResult=std::tuple<unsigned long,unsigned long,unsigned long>;
+
+uint64_t ms_select2(const std::vector<PosKeyPair>& data,
+    const std::vector<std::pair<size_t, size_t>>& sorted_ranges,
+    size_t global_rank) noexcept {
+    // Set initial binary search bounds for keys
+    uint64_t low = std::numeric_limits<uint64_t>::min();
+    uint64_t high = std::numeric_limits<uint64_t>::max();
+
+        while (low < high) {
+        uint64_t mid = low + (high - low) / 2;
+
+        // Estimate how many elements are ≤ mid across all sorted ranges
+        size_t rank = 0;
+        for (size_t j=0;j<sorted_ranges.size();++j) {
+            const size_t start=sorted_ranges[j].first;
+            const size_t end=sorted_ranges[j].second;
+            auto it = std::upper_bound(
+            data.begin() + start, data.begin() + end, mid,
+            [](uint64_t value, const PosKeyPair& elem) {
+                return value < elem.key;
+            }
+        );
+            rank += (it - (data.begin() + start));
+        }
+
+        if (rank <= global_rank) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+
+    return low;
+}
+struct HeapNode {
+    uint64_t key;          // Key for sorting
+    size_t subrange_idx;   // Which subarray this element belongs to
+    size_t pos;            // Position in data of this element
+    // This operator makes the priority_queue a min-heap by key
+    bool operator>(const HeapNode& other) const {
+        return key > other.key;
+    }
+};
+
+std::vector<PosKeyPair> k_way_merge_heap(
+    const PosKeyVec& data,
+    const std::vector<IndexPair>& subranges
+) noexcept {
+    size_t k = subranges.size();
+
+    // Min-heap: smallest key at top
+    std::priority_queue<HeapNode, std::vector<HeapNode>, std::greater<HeapNode>> min_heap;
+
+    // Reserve total output size for efficiency
+    size_t total_size = 0;
+    for (const auto& range : subranges) {
+        total_size += (range.second - range.first);
+    }
+    std::vector<PosKeyPair> merged(total_size);
+    //merged.reserve(total_size);
+
+    // Initialize the heap with the first element of each subrange (if not empty)
+    for (size_t i = 0; i < k; ++i) {
+        size_t start = subranges[i].first;
+        size_t end = subranges[i].second;
+        if (start < end) {
+            min_heap.push({data[start].key, i, start});
+        }
+    }
+    size_t i=0;
+    // Extract-min and push next element from the same subrange until heap is empty
+    while (!min_heap.empty()) {
+        HeapNode current = min_heap.top();
+        min_heap.pop();
+
+        merged[i]=data[current.pos];
+        ++i;
+
+        size_t next_pos = current.pos + 1;
+        size_t sub_i = current.subrange_idx;
+        if (next_pos < subranges[sub_i].second) {
+            min_heap.push({data[next_pos].key, sub_i, next_pos});
+        }
+    }
+
+    return merged;
+}
+
+void radix_sort_by_key(PosKeyVec& data) noexcept {
+    constexpr size_t num_bytes = sizeof(uint64_t); // 8 bytes for uint64_t
+    constexpr size_t radix = 256;  // 8-bit radix per pass
+    const size_t n = data.size();
+    
+    PosKeyVec buffer(n);
+    
+    for (size_t byte = 0; byte < num_bytes; ++byte) {
+        size_t count[radix] = {0};
+        
+        // Histogram the byte values
+        for (size_t j=0;j<data.size();++j) {
+            uint8_t val = (data[j].key >> (byte * 8)) & 0xFF;
+            count[val]++;
+        }
+        
+        // Compute prefix sum
+        size_t offset[radix];
+        offset[0] = 0;
+        for (size_t i = 1; i < radix; ++i)
+        offset[i] = offset[i - 1] + count[i - 1];
+        
+        // Place elements into buffer
+        for (size_t j=0;j<data.size();++j) {
+            uint8_t val = (data[j].key >> (byte * 8)) & 0xFF;
+            buffer[offset[val]++] = data[j];
+        }
+        
+        // Swap buffers
+        std::swap(data, buffer);
+    }
+}
+
+void radix_sort_slice(PosKeyVec& data, size_t start, size_t end) noexcept {
+    PosKeyVec slice(data.begin() + start, data.begin() + end);
+    radix_sort_by_key(slice);
+    std::copy(slice.begin(), slice.end(), data.begin() + start);
 }

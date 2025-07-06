@@ -15,7 +15,6 @@
 #include <queue>
 #include <numeric>
 #include <mpi.h>
-
 MPI_Datatype create_poskeypair_type() {
     MPI_Datatype type;
     int lengths[4] = {1, 1, 1, 1};
@@ -31,138 +30,77 @@ MPI_Datatype create_poskeypair_type() {
     MPI_Type_commit(&type);
     return type;
 }
+void inline build_pivot_subrange(
+    size_t start,size_t end, int j,
+    const std::vector<uint64_t>& pivots,
+    const std::vector<PosKeyPair>& data,
+    std::vector<std::vector<IndexPair>>& bucket_subranges 
+){
+    auto begin_it = data.begin() + start;
+    auto end_it = data.begin() + end;
+    size_t last_idx = start;
+    for (size_t b = 0; b < pivots.size()+1; ++b) {
+        auto low = data.begin() + last_idx;
+        
+        auto high = (b < pivots.size())
+        ? std::upper_bound(low, end_it, pivots[b],
+            [](uint64_t val, const PosKeyPair& elem) {
+                return val < elem.key;
+            })
+            : end_it;
+        bucket_subranges[b][j]=IndexPair(low - data.begin(), high - data.begin());
+        last_idx = high - data.begin();
+        if (last_idx >= end) break;
+    }
+}
 
-using PosKeyVec=std::vector<PosKeyPair>;
-
-using IndexPair=std::pair<unsigned long,unsigned long>;
-using SortResult=std::tuple<unsigned long,unsigned long,unsigned long>;
-
-uint64_t ms_select2(const std::vector<PosKeyPair>& data,
-    const std::vector<std::pair<size_t, size_t>>& sorted_ranges,
-    size_t global_rank) noexcept {
-    // Set initial binary search bounds for keys
-    uint64_t low = std::numeric_limits<uint64_t>::min();
-    uint64_t high = std::numeric_limits<uint64_t>::max();
-
-        while (low < high) {
-        uint64_t mid = low + (high - low) / 2;
-
-        // Estimate how many elements are ≤ mid across all sorted ranges
-        size_t rank = 0;
-        for (size_t j=0;j<sorted_ranges.size();++j) {
-            const size_t start=sorted_ranges[j].first;
-            const size_t end=sorted_ranges[j].second;
-            auto it = std::upper_bound(
-            data.begin() + start, data.begin() + end, mid,
-            [](uint64_t value, const PosKeyPair& elem) {
-                return value < elem.key;
+void buffered_poskey_write(const std::string in_filename,const std::string out_filename,size_t file_offset,PosKeyPair* data,size_t data_count,size_t payload_max,size_t memory_limit){
+    size_t thread_offset = file_offset;                  // Start of this thread's output region
+    const auto& pkp_list = data;            // Sorted records for this thread
+    std::ifstream in_file(in_filename, std::ios::binary);
+    
+    char* payload_buf=new char[payload_max];                      // Input record buffer
+    char* out_buf=new char[memory_limit];                   // Output write buffer
+    size_t out_pos = 0;                                 // Current write buffer position
+    
+    int fd = open(out_filename.c_str(), O_RDWR);
+    if (fd < 0) {
+        perror("open");
+        return;
+    }
+    
+    for (size_t j=0;j<data_count;++j) {
+        in_file.seekg(pkp_list[j].offset + sizeof(uint64_t) + sizeof(uint64_t));
+        in_file.read(payload_buf, pkp_list[j].len);
+        size_t record_size = sizeof(pkp_list[j].key) + sizeof(pkp_list[j].len) + pkp_list[j].len;
+        if (out_pos + record_size > memory_limit) {
+            ssize_t written = pwrite(fd, out_buf, out_pos, thread_offset);
+            if (written < 0) {
+                perror("pwrite");
+                break;
             }
-        );
-            rank += (it - (data.begin() + start));
+            thread_offset += written;
+            out_pos = 0;
         }
-
-        if (rank <= global_rank) {
-            low = mid + 1;
-        } else {
-            high = mid;
-        }
+        std::memcpy(out_buf + out_pos, &pkp_list[j].key, sizeof(pkp_list[j].key));
+        out_pos += sizeof(pkp_list[j].key);
+        std::memcpy(out_buf + out_pos, &pkp_list[j].len, sizeof(pkp_list[j].len));
+        out_pos += sizeof(pkp_list[j].len);
+        std::memcpy(out_buf + out_pos, payload_buf, pkp_list[j].len);
+        out_pos += pkp_list[j].len;
     }
-
-    return low;
-}
-struct HeapNode {
-    uint64_t key;          // Key for sorting
-    size_t subrange_idx;   // Which subarray this element belongs to
-    size_t pos;            // Position in data of this element
-    // This operator makes the priority_queue a min-heap by key
-    bool operator>(const HeapNode& other) const {
-        return key > other.key;
-    }
-};
-std::vector<PosKeyPair> k_way_merge_heap(
-    const PosKeyVec& data,
-    const std::vector<IndexPair>& subranges
-) noexcept {
-    size_t k = subranges.size();
-
-    // Min-heap: smallest key at top
-    std::priority_queue<HeapNode, std::vector<HeapNode>, std::greater<HeapNode>> min_heap;
-
-    // Reserve total output size for efficiency
-    size_t total_size = 0;
-    for (const auto& range : subranges) {
-        total_size += (range.second - range.first);
-    }
-    std::vector<PosKeyPair> merged(total_size);
-    //merged.reserve(total_size);
-
-    // Initialize the heap with the first element of each subrange (if not empty)
-    for (size_t i = 0; i < k; ++i) {
-        size_t start = subranges[i].first;
-        size_t end = subranges[i].second;
-        if (start < end) {
-            min_heap.push({data[start].key, i, start});
-        }
-    }
-    size_t i=0;
-    // Extract-min and push next element from the same subrange until heap is empty
-    while (!min_heap.empty()) {
-        HeapNode current = min_heap.top();
-        min_heap.pop();
-
-        merged[i]=data[current.pos];
-        ++i;
-
-        size_t next_pos = current.pos + 1;
-        size_t sub_i = current.subrange_idx;
-        if (next_pos < subranges[sub_i].second) {
-            min_heap.push({data[next_pos].key, sub_i, next_pos});
-        }
-    }
-
-    return merged;
-}
-
-void radix_sort_by_key(PosKeyVec& data) noexcept {
-    constexpr size_t num_bytes = sizeof(uint64_t); // 8 bytes for uint64_t
-    constexpr size_t radix = 256;  // 8-bit radix per pass
-    const size_t n = data.size();
     
-    PosKeyVec buffer(n);
-    
-    for (size_t byte = 0; byte < num_bytes; ++byte) {
-        size_t count[radix] = {0};
-        
-        // Histogram the byte values
-        for (size_t j=0;j<data.size();++j) {
-            uint8_t val = (data[j].key >> (byte * 8)) & 0xFF;
-            count[val]++;
+    if (out_pos > 0) {
+        ssize_t written = pwrite(fd, out_buf, out_pos, thread_offset);
+        if (written < 0) {
+            perror("pwrite");
         }
-        
-        // Compute prefix sum
-        size_t offset[radix];
-        offset[0] = 0;
-        for (size_t i = 1; i < radix; ++i)
-        offset[i] = offset[i - 1] + count[i - 1];
-        
-        // Place elements into buffer
-        for (size_t j=0;j<data.size();++j) {
-            uint8_t val = (data[j].key >> (byte * 8)) & 0xFF;
-            buffer[offset[val]++] = data[j];
-        }
-        
-        // Swap buffers
-        std::swap(data, buffer);
     }
+    delete out_buf;
+    delete payload_buf;
+    in_file.close();
+    close(fd);
 }
-
-void radix_sort_slice(PosKeyVec& data, size_t start, size_t end) noexcept {
-    PosKeyVec slice(data.begin() + start, data.begin() + end);
-    radix_sort_by_key(slice);
-    std::copy(slice.begin(), slice.end(), data.begin() + start);
-}
-
-
 
 int main(int argc,char*argv[]) noexcept{
     uint64_t records_num=0;
@@ -248,35 +186,22 @@ int main(int argc,char*argv[]) noexcept{
     }
     
     std::vector<std::vector<IndexPair>> bucket_subranges(threads_num);
+    for(int i=0;i<bucket_subranges.size();i++){
+        bucket_subranges[i].resize(threads_num);
+    }
     
+    #pragma omp parallel for schedule(static) shared(bucket_subranges)
     for (size_t j=0;j<sorted_ranges.size();++j) {
         const size_t start=sorted_ranges[j].first;
         const size_t end=sorted_ranges[j].second;
-        auto begin_it = local_data.begin() + start;
-        auto end_it = local_data.begin() + end;
-
-        size_t last_idx = start;
-
-        for (size_t b = 0; b < threads_num; ++b) {
-            auto low = local_data.begin() + last_idx;
+        build_pivot_subrange(
+            start,end,j,
             
-            auto high = (b < pivots.size())
-            ? std::upper_bound(low, end_it, pivots[b],
-                [](uint64_t val, const PosKeyPair& elem) {
-                    return val < elem.key;
-                })
-                : end_it;
-                
-            if (low < high) {
-                bucket_subranges[b].emplace_back(low - local_data.begin(), high - local_data.begin());
-            }
-                
-            last_idx = high - local_data.begin();
-            if (last_idx >= end) break;
-        }
-        
+            pivots,local_data,
+
+            bucket_subranges
+        );
     }
-    
     PosKeyVec result;
     std::vector<PosKeyVec> merged_ranges(threads_num);
     #pragma omp parallel for shared(local_data) shared(bucket_subranges) schedule(static)
@@ -297,9 +222,8 @@ int main(int argc,char*argv[]) noexcept{
     std::vector<PosKeyVec> final_data(nprocs);
     uint64_t rank_offset;
     if(rank==0){
-
         // estimating  the ranks using ms_select
-        std::vector<uint64_t> global_pivots(nprocs-1);
+        std::vector<uint64_t> global_pivots(std::max(nprocs-1,1));
         
         std::vector<IndexPair> rank_sorted_ranges;
         
@@ -314,38 +238,33 @@ int main(int argc,char*argv[]) noexcept{
             int global_rank=i*(pos_key_data.size()/nprocs);
             global_pivots[i-1]=ms_select2(recvbuf,rank_sorted_ranges,global_rank);
         }
+        if(global_pivots.size()==1){
+            global_pivots[0]=ms_select2(recvbuf,rank_sorted_ranges,pos_key_data.size());
+        }
         std::vector<std::vector<IndexPair>> global_bucket_subranges(nprocs);
+        for(int j=0;j<global_bucket_subranges.size();j++){
+            global_bucket_subranges[j].resize(nprocs);
+        }
         std::vector<std::vector<size_t>> global_buckets_bytes(nprocs);
-        
+        for(int j=0;j<global_buckets_bytes.size();j++){
+            global_buckets_bytes[j].resize(nprocs);
+        }
+        #pragma omp parallel for shared(global_bucket_subranges,global_buckets_bytes) schedule(static)
         for (size_t j=0;j<rank_sorted_ranges.size();++j) {
             const size_t start=rank_sorted_ranges[j].first;
             const size_t end=rank_sorted_ranges[j].second;
-            auto begin_it = recvbuf.begin() + start;
-            auto end_it = recvbuf.begin() + end;
-            
-            size_t last_idx = start;
-            
-            for (size_t b = 0; b < nprocs; ++b) {
-                auto low = recvbuf.begin() + last_idx;
-                
-                auto high = (b < global_pivots.size())
-                ? std::upper_bound(low, end_it, global_pivots[b],
-                    [](uint64_t val, const PosKeyPair& elem) {
-                        return val < elem.key;
-                    })
-                    : end_it;
-                    
-                    if (low <= high) {
-                        global_bucket_subranges[b].emplace_back(low - recvbuf.begin(), high - recvbuf.begin());
-                        const auto& last_pair=global_bucket_subranges[b].back();
-                        size_t byte_size=0;
-                        for(size_t j=last_pair.first;j<last_pair.second;j++){
-                            byte_size+=recvbuf[j].len+sizeof(uint64_t)+sizeof(uint64_t);
-                        }
-                        global_buckets_bytes[b].emplace_back(byte_size);
+            build_pivot_subrange(
+                start,end,j,
+                global_pivots,recvbuf,
+                global_bucket_subranges
+            );
+            for(size_t b=0;b<nprocs;++b){
+                const auto& last_pair=global_bucket_subranges[b][j];
+                size_t byte_size=0;
+                for(size_t j=last_pair.first;j<last_pair.second;j++){
+                    byte_size+=recvbuf[j].len+sizeof(uint64_t)+sizeof(uint64_t);
                 }
-                last_idx = high - recvbuf.begin();
-                if (last_idx >= end) break;
+                global_buckets_bytes[b][j]=byte_size;
             }
         }
         std::ifstream in_file(in_filename,std::ifstream::binary | std::ifstream::ate);
@@ -438,7 +357,7 @@ int main(int argc,char*argv[]) noexcept{
         }
     }
 
-    std::vector<IndexPair> pairs(final_data.size());
+    std::vector<IndexPair> pairs;
     size_t offset_acc=0;
     for(int i=0;i<final_data.size();i++){
         pairs.push_back(IndexPair(offset_acc,offset_acc+final_data[i].size()));
@@ -453,35 +372,20 @@ int main(int argc,char*argv[]) noexcept{
 
     
     std::vector<std::vector<IndexPair>> rank_bucket_subranges(threads_num);
-    
+    for(int j=0;j<rank_bucket_subranges.size();j++){
+        rank_bucket_subranges[j].resize(pairs.size());
+    }
+
+    #pragma omp parallel for shared(rank_bucket_subranges)
     for (size_t j=0;j<pairs.size();++j) {
         const size_t start=pairs[j].first;
         const size_t end=pairs[j].second;
-        auto begin_it = rank_result.begin() + start;
-        auto end_it = rank_result.begin() + end;
-
-        size_t last_idx = start;
-
-        for (size_t b = 0; b < threads_num; ++b) {
-            auto low = rank_result.begin() + last_idx;
-            
-            auto high = (b < file_pivots.size())   
-            ? std::upper_bound(low, end_it, file_pivots[b],
-                [](uint64_t val, const PosKeyPair& elem) {
-                    return val < elem.key;
-                })
-                : end_it;
-                
-            if (low < high) {
-                rank_bucket_subranges[b].emplace_back(low - rank_result.begin(), high - rank_result.begin());
-            }
-                
-            last_idx = high - rank_result.begin();
-            if (last_idx >= end) break;
-        }
-        
+        build_pivot_subrange(
+            start,end,j,
+            file_pivots,rank_result,
+            rank_bucket_subranges
+        );
     }
-
     std::vector<PosKeyVec> sorted_merged_ranges(threads_num);
     std::vector<size_t> bytes_nums(threads_num);
     const unsigned int payload_header_size=sizeof(uint64_t)+sizeof(uint64_t);
@@ -506,53 +410,8 @@ int main(int argc,char*argv[]) noexcept{
 
     #pragma omp parallel for schedule(static) shared(sorted_merged_ranges)
     for (int i = 0; i < threads_num; ++i) {
-        size_t thread_offset = offsets[i];                  // Start of this thread's output region
-        const auto& pkp_list = sorted_merged_ranges[i];            // Sorted records for this thread
-        std::ifstream in_file(in_filename, std::ios::binary);
-        
-        char* payload_buf=new char[payload_max];                      // Input record buffer
-        char* out_buf=new char[payload_thread_max];                   // Output write buffer
-        size_t out_pos = 0;                                 // Current write buffer position
-        
-        int fd = open(out_filename.c_str(), O_RDWR);
-        if (fd < 0) {
-            perror("open");
-            continue;
-        }
-        
-        for (size_t j=0;j<pkp_list.size();++j) {
-            in_file.seekg(pkp_list[j].offset + sizeof(uint64_t) + sizeof(uint64_t));
-            in_file.read(payload_buf, pkp_list[j].len);
-            size_t record_size = sizeof(pkp_list[j].key) + sizeof(pkp_list[j].len) + pkp_list[j].len;
-            if (out_pos + record_size > payload_thread_max) {
-                ssize_t written = pwrite(fd, out_buf, out_pos, thread_offset);
-                if (written < 0) {
-                    perror("pwrite");
-                    break;
-                }
-                thread_offset += written;
-                out_pos = 0;
-            }
-            std::memcpy(out_buf + out_pos, &pkp_list[j].key, sizeof(pkp_list[j].key));
-            out_pos += sizeof(pkp_list[j].key);
-            std::memcpy(out_buf + out_pos, &pkp_list[j].len, sizeof(pkp_list[j].len));
-            out_pos += sizeof(pkp_list[j].len);
-            std::memcpy(out_buf + out_pos, payload_buf, pkp_list[j].len);
-            out_pos += pkp_list[j].len;
-        }
-        
-        if (out_pos > 0) {
-            ssize_t written = pwrite(fd, out_buf, out_pos, thread_offset);
-            if (written < 0) {
-                perror("pwrite");
-            }
-        }
-        delete out_buf;
-        delete payload_buf;
-        in_file.close();
-        close(fd);
+        buffered_poskey_write(in_filename,out_filename,offsets[i],sorted_merged_ranges[i].data(),sorted_merged_ranges[i].size(),payload_max,payload_thread_max);
     }
-    //MPI_Barrier(MPI_COMM_WORLD); // Ensure all ranks done
     MPI_Type_free(&pkp_type);
     MPI_Finalize();
     if(rank==0){

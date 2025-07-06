@@ -30,7 +30,6 @@ struct MemoryRecord{
     uint64_t key; 
     uint64_t offset;
 };
-
 //used to sort the values within a single node
 struct PosKeyPair{
     uint64_t key; 
@@ -49,4 +48,14 @@ using IndexPair=std::pair<unsigned long,unsigned long>;
 using SortResult=std::tuple<unsigned long,unsigned long,unsigned long>;
 
 uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair> ranges, int k) ;
+uint64_t ms_select2(const std::vector<PosKeyPair>& data,
+    const std::vector<std::pair<size_t, size_t>>& sorted_ranges,
+    size_t global_rank) noexcept ;
 std::vector<PosKeyPair> k_way_merge_from_ranges(const PosKeyVec& data,const std::vector<IndexPair>& subranges);
+void radix_sort_by_key(PosKeyVec& data) noexcept;
+std::vector<PosKeyPair> k_way_merge_heap(
+    const PosKeyVec& data,
+    const std::vector<IndexPair>& subranges
+) noexcept ;
+
+void radix_sort_slice(PosKeyVec& data, size_t start, size_t end) noexcept ;
