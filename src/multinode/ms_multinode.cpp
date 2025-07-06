@@ -123,7 +123,8 @@ int main(int argc,char*argv[]) noexcept{
         return 1;
     }
     auto start_time = std::chrono::high_resolution_clock::now();
-    MPI_Init(&argc, &argv);
+    int provided;
+    MPI_Init_thread( &argc , &argv , MPI_THREAD_MULTIPLE, &provided);
 
     int rank, nprocs;
     std::vector<PosKeyPair> pos_key_data= std::move(read_records(in_filename,memory_limit));
@@ -294,58 +295,71 @@ int main(int argc,char*argv[]) noexcept{
 
         rank_offset=offsets[0];
 
-        for(int i=1;i<global_bucket_subranges.size();i++){
-
-            for(int j=0;j<global_bucket_subranges[i].size();j++){
-                size_t count=global_bucket_subranges[i][j].second-global_bucket_subranges[i][j].first;
-                size_t bytes=global_buckets_bytes[i][j];
-                // send offset for the file,the number of values
-                // and the actual data to reference the original file
-                MPI_Send( 
-                    &bytes , 1 , MPI_UINT64_T, 
-                    i , i , MPI_COMM_WORLD
-                );
-                MPI_Send( 
-                    &count , 1 , MPI_UINT64_T, 
-                    i , i , MPI_COMM_WORLD
-                );
-                MPI_Send(
-                    recvbuf.data()+global_bucket_subranges[i][j].first,count,pkp_type,
-                    i,i,MPI_COMM_WORLD
-                );
-            }
-
-            if(global_buckets_bytes[i].size()==0){
-                for(int j=0;j<nprocs;j++){
-                    size_t bytes=0;
-                    MPI_Send( 
-                        &bytes , 1 , MPI_UINT64_T, 
-                        i , i , MPI_COMM_WORLD
-                    );
-
+        #pragma omp parallel shared(final_data,buckets_bytes,global_bucket_subranges,global_buckets_bytes,recvbuf)
+        {
+            #pragma omp single
+            {
+                for(int i=1;i<global_bucket_subranges.size();i++){
+                    #pragma omp task
+                    {
+                        for(int j=0;j<global_bucket_subranges[i].size();j++){
+                            size_t count=global_bucket_subranges[i][j].second-global_bucket_subranges[i][j].first;
+                            size_t bytes=global_buckets_bytes[i][j];
+                            // send offset for the file,the number of values
+                            // and the actual data to reference the original file
+                            MPI_Send( 
+                                &bytes , 1 , MPI_UINT64_T, 
+                                i , j , MPI_COMM_WORLD
+                            );
+                            MPI_Send( 
+                                &count , 1 , MPI_UINT64_T, 
+                                i , j , MPI_COMM_WORLD
+                            );
+                            MPI_Send(
+                                recvbuf.data()+global_bucket_subranges[i][j].first,count,pkp_type,
+                                i,j,MPI_COMM_WORLD
+                            );
+                        }
+                        
+                        if(global_buckets_bytes[i].size()==0){
+                            for(int j=0;j<nprocs;j++){
+                                size_t bytes=0;
+                                MPI_Send( 
+                                    &bytes , 1 , MPI_UINT64_T, 
+                                    i , j , MPI_COMM_WORLD
+                                );
+                                
+                            }
+                        }
+                    }
+                }
+                #pragma omp task
+                {
+                    for(int i=0;i<global_bucket_subranges[0].size();i++){
+                        size_t count=global_bucket_subranges[0][i].second-global_bucket_subranges[0][i].first;
+                        buckets_bytes[i]=global_buckets_bytes[0][i];
+                        final_data[i].resize(count);
+                        std::copy(
+                            recvbuf.begin()+global_bucket_subranges[0][i].first,recvbuf.begin()+global_bucket_subranges[0][i].second,
+                            final_data[i].begin()
+                        );
+                    }
                 }
             }
         }
-        for(int i=0;i<global_bucket_subranges[0].size();i++){
-            size_t count=global_bucket_subranges[0][i].second-global_bucket_subranges[0][i].first;
-            buckets_bytes[i]=global_buckets_bytes[0][i];
-            final_data[i].resize(count);
-            std::copy(
-                recvbuf.begin()+global_bucket_subranges[0][i].first,recvbuf.begin()+global_bucket_subranges[0][i].second,
-                final_data[i].begin()
-            );
-        }
     }else{
         MPI_Recv(&rank_offset,1,MPI_UINT64_T,0,MPI_ANY_TAG,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
+
+        #pragma omp parallel for schedule(static) shared(buckets_bytes,final_data)
         for(int i=0;i<nprocs;i++){
             uint64_t count = 0;
             uint64_t bucket_bytes =0;
-            MPI_Recv(&bucket_bytes, 1, MPI_UINT64_T, 0, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            MPI_Recv(&bucket_bytes, 1, MPI_UINT64_T, 0, i, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             if(bucket_bytes==0) continue;
             buckets_bytes[i]=bucket_bytes;
-            MPI_Recv(&count, 1, MPI_UINT64_T, 0, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            MPI_Recv(&count, 1, MPI_UINT64_T, 0, i, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             final_data[i].resize(count);
-            MPI_Recv(final_data[i].data(),count,pkp_type,0,MPI_ANY_TAG,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
+            MPI_Recv(final_data[i].data(),count,pkp_type,0,i,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
         }
     }
     const size_t payload_thread_max=memory_limit/threads_num;
