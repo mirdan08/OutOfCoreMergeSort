@@ -5,7 +5,7 @@ CXXFLAGS= -std=c++20 -fopenmp
 
 INCLUDES   = -Iinclude/fastflow/ -Isrc/
 LDFLAGS    = -pthread -Wall -Wextra
-OPTFLAGS   = -ffast-math -O3 -ftree-vectorize
+OPTFLAGS   = -ffast-math -O3 -ftree-vectorize -DNDEBUG
 
 RPAYLOAD_MAX = 32
 

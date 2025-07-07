@@ -61,6 +61,7 @@ void k_way_merge_buffer(
 
 std::vector<PosKeyPair> k_way_merge_from_ranges(const PosKeyVec& data,const std::vector<IndexPair>& subranges);
 void radix_sort_by_key(PosKeyVec& data) noexcept;
+void radix_sort_buffer(PosKeyPair* data, size_t n);
 std::vector<PosKeyPair> k_way_merge_heap(
     const PosKeyVec& data,
     const std::vector<IndexPair>& subranges

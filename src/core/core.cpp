@@ -326,6 +326,51 @@ void radix_sort_by_key(PosKeyVec& data) noexcept {
         std::swap(data, buffer);
     }
 }
+void radix_sort_buffer(PosKeyPair* data, size_t n) {
+    constexpr size_t num_bytes = sizeof(uint64_t); // 8 passes for 64-bit keys
+    constexpr size_t radix = 256;                  // 8-bit radix per pass
+    PosKeyPair* A = new PosKeyPair[n];
+    PosKeyPair* B = new PosKeyPair[n];
+
+    // Copy input to A
+    std::memcpy(A, data, n * sizeof(PosKeyPair));
+
+    for (size_t byte = 0; byte < num_bytes; ++byte) {
+        size_t count[radix] = {0};   // Histogram
+        size_t offset[radix];        // Prefix sums
+
+        // 1. Histogram the byte values
+        for (size_t j = 0; j < n; ++j) {
+            uint8_t val = (A[j].key >> (byte * 8)) & 0xFF;
+            count[val]++;
+        }
+
+        // 2. Prefix sum to get bucket offsets
+        offset[0] = 0;
+        for (size_t i = 1; i < radix; ++i) {
+            offset[i] = offset[i - 1] + count[i - 1];
+        }
+
+        // 3. Scatter elements into B using offsets
+        for (size_t j = 0; j < n; ++j) {
+            uint8_t val = (A[j].key >> (byte * 8)) & 0xFF;
+            B[offset[val]++] = A[j];
+        }
+
+        // 4. Swap A and B pointers
+        std::swap(A, B);
+    }
+
+    // If num_bytes is even, result is in A; else in B
+    if (num_bytes % 2 == 0) {
+        std::memcpy(data, A, n * sizeof(PosKeyPair));
+    } else {
+        std::memcpy(data, B, n * sizeof(PosKeyPair));
+    }
+
+    delete[] A;
+    delete[] B;
+}
 
 void radix_sort_slice(PosKeyVec& data, size_t start, size_t end) noexcept {
     PosKeyVec slice(data.begin() + start, data.begin() + end);
