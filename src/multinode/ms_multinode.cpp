@@ -202,8 +202,8 @@ int main(int argc,char*argv[]) noexcept{
     }
    PosKeyVec sendbuf;
    sendbuf.resize(local_data.size());
-    std::vector<size_t> total_sizes(threads_num);
-    std::vector<size_t> merge_offsets(threads_num);
+   std::vector<size_t> merge_offsets(threads_num);
+   std::vector<size_t> total_sizes(threads_num);
     for(int i=0;i<threads_num;i++){
         size_t total_size = 0;
         for (const auto& range : bucket_subranges[i]) {
@@ -450,10 +450,34 @@ int main(int argc,char*argv[]) noexcept{
             rank_bucket_subranges
         );
     }
+    std::vector<size_t> rank_merge_offsets(threads_num);
+    std::vector<size_t> rank_total_sizes(threads_num);
+    for(int i=0;i<threads_num;i++){
+        size_t total_size = 0;
+        for (const auto& range : rank_bucket_subranges[i]) {
+            total_size += (range.second - range.first);
+        }
+        rank_total_sizes[i]=total_size;
+    }
     
-    std::vector<PosKeyVec> sorted_merged_ranges(threads_num);
+    size_t rank_merge_offset=0;
+    for(int i=0;i<threads_num;i++){
+        rank_merge_offsets[i]=rank_merge_offset;
+        rank_merge_offset+=rank_total_sizes[i];
+    }
+
+    std::vector<PosKeyPair> rank_final_result(rank_result.size());
     std::vector<size_t> bytes_nums(threads_num);
     const unsigned int payload_header_size=sizeof(uint64_t)+sizeof(uint64_t);
+    #pragma omp parallel for shared(local_data) shared(bucket_subranges) schedule(static)
+    for(int i=0;i<threads_num;i++){
+        k_way_merge_buffer(rank_result.data(),rank_bucket_subranges[i],rank_final_result.data()+rank_merge_offsets[i],rank_total_sizes[i]);
+        for(int j=0;j<rank_total_sizes[i];j++){
+            bytes_nums[i]+=rank_final_result[rank_merge_offsets[i]+j].len+payload_header_size;
+        }
+    }
+    
+    /* std::vector<PosKeyVec> sorted_merged_ranges(threads_num);
     #pragma omp parallel for shared(rank_result) shared(pairs) schedule(static)
     for(int i=0;i<threads_num;i++){
             sorted_merged_ranges[i]=std::move(k_way_merge_heap(rank_result,rank_bucket_subranges[i]));
@@ -463,7 +487,7 @@ int main(int argc,char*argv[]) noexcept{
                 local_bytes+=payload_header_size+sorted_merged_ranges[i][j].len;
             }
             bytes_nums[i]=local_bytes; 
-    }
+    } */
     std::vector<size_t> offsets(threads_num);
     size_t byte_offset=0;
     for(int i=0;i<threads_num;i++){
@@ -473,10 +497,11 @@ int main(int argc,char*argv[]) noexcept{
 
 
 
-    #pragma omp parallel for schedule(static) shared(sorted_merged_ranges)
+    #pragma omp parallel for schedule(static)
     for (int i = 0; i < threads_num; ++i) {
-        buffered_poskey_write(in_filename,out_filename,offsets[i],sorted_merged_ranges[i].data(),sorted_merged_ranges[i].size(),payload_max,payload_thread_max);
+        buffered_poskey_write(in_filename,out_filename,offsets[i],rank_final_result.data()+rank_merge_offsets[i],rank_total_sizes[i],payload_max,payload_thread_max);
     }
+
     MPI_Type_free(&pkp_type);
     MPI_Finalize();
     if(rank==0){
