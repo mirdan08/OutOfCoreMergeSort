@@ -256,6 +256,44 @@ std::vector<PosKeyPair> k_way_merge_heap(
     return merged;
 }
 
+void k_way_merge_buffer(
+    PosKeyPair* src_data,
+    std::vector<IndexPair>& subranges,
+    PosKeyPair* dst_data,
+    const size_t count
+) noexcept {
+    size_t k = subranges.size();
+
+    // Min-heap: smallest key at top
+    std::priority_queue<HeapNode, std::vector<HeapNode>, std::greater<HeapNode>> min_heap;
+
+    // Reserve total output size for efficiency
+    size_t total_size = count;
+    // Initialize the heap with the first element of each subrange (if not empty)
+    for (size_t i = 0; i < k; ++i) {
+        size_t start = subranges[i].first;
+        size_t end = subranges[i].second;
+        if (start < end) {
+            min_heap.push({src_data[start].key, i, start});
+        }
+    }
+    size_t i=0;
+    // Extract-min and push next element from the same subrange until heap is empty
+    while (!min_heap.empty()) {
+        HeapNode current = min_heap.top();
+        min_heap.pop();
+
+        dst_data[i]=src_data[current.pos];
+        ++i;
+
+        size_t next_pos = current.pos + 1;
+        size_t sub_i = current.subrange_idx;
+        if (next_pos < subranges[sub_i].second) {
+            min_heap.push({src_data[next_pos].key, sub_i, next_pos});
+        }
+    }
+}
+
 void radix_sort_by_key(PosKeyVec& data) noexcept {
     constexpr size_t num_bytes = sizeof(uint64_t); // 8 bytes for uint64_t
     constexpr size_t radix = 256;  // 8-bit radix per pass

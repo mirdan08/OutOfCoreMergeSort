@@ -51,6 +51,14 @@ uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair> ranges, i
 uint64_t ms_select2(const std::vector<PosKeyPair>& data,
     const std::vector<std::pair<size_t, size_t>>& sorted_ranges,
     size_t global_rank) noexcept ;
+
+void k_way_merge_buffer(
+        PosKeyPair* src_data,
+        std::vector<IndexPair>& subranges,
+        PosKeyPair* dst_data,
+        const size_t count
+    ) noexcept;
+
 std::vector<PosKeyPair> k_way_merge_from_ranges(const PosKeyVec& data,const std::vector<IndexPair>& subranges);
 void radix_sort_by_key(PosKeyVec& data) noexcept;
 std::vector<PosKeyPair> k_way_merge_heap(
