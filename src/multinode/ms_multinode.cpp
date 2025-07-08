@@ -160,7 +160,9 @@ int main(int argc,char*argv[]) noexcept{
         0,MPI_COMM_WORLD,
         &req
     );
-
+    if(rank>0){
+        MPI_Wait( &req ,MPI_STATUS_IGNORE);
+    }
     std::vector<IndexPair> sorted_ranges;
     size_t chunk_base = local_data.size() / threads_num;
     size_t remainder = local_data.size() % threads_num;
@@ -230,6 +232,10 @@ int main(int argc,char*argv[]) noexcept{
         recvbuf.data(),sendcounts.data(),displs.data(),pkp_type,
         0,MPI_COMM_WORLD
     );
+    for(const auto& pkp:recvbuf){
+        std::cout<< "from 0 "<< pkp.key << std::endl;
+    }
+
     std::vector<uint64_t> buckets_bytes(nprocs);
     std::vector<PosKeyVec> final_data(nprocs);
     uint64_t rank_offset;
@@ -247,7 +253,6 @@ int main(int argc,char*argv[]) noexcept{
         rank_sorted_ranges.push_back(IndexPair(displs[nprocs-1],pos_key_data.size()));
         for(size_t i=1;i<nprocs;++i){
             rank_sorted_ranges.push_back(IndexPair(displs[i-1],displs[i]));
-
         }
 
         #pragma omp parallel for shared(pivots) shared(rank_sorted_ranges) schedule(static)
@@ -315,7 +320,7 @@ int main(int argc,char*argv[]) noexcept{
         std::vector<std::vector<uint64_t>> local_counts(global_bucket_subranges.size());
         std::vector<std::vector<uint64_t>> local_bytes(global_bucket_subranges.size());
         std::vector<std::vector<uint64_t>> local_offsets(global_bucket_subranges.size());
-        for(int i=1;i<global_bucket_subranges.size();i++){
+        for(int i=0;i<global_bucket_subranges.size();i++){
             local_counts[i].resize(global_bucket_subranges[i].size());
             local_bytes[i].resize(global_bucket_subranges[i].size());
             local_offsets[i].resize(global_bucket_subranges[i].size());
@@ -325,24 +330,25 @@ int main(int argc,char*argv[]) noexcept{
                 local_bytes[i][j]=global_buckets_bytes[i][j];
                 local_offsets[i][j]=global_bucket_subranges[i][j].first;
             }
-
-            MPI_Isend( local_counts[i].data(), global_bucket_subranges[i].size() , MPI_UINT64_T, i , 1 , MPI_COMM_WORLD, &reqs[i][2]);
-            MPI_Isend( local_bytes[i].data(), global_bucket_subranges[i].size() , MPI_UINT64_T, i , 2 , MPI_COMM_WORLD, &reqs[i][3]);
-            sendreqs[i].resize(global_bucket_subranges[i].size());
-            for(int j=0;j<global_bucket_subranges[i].size();j++){
-                MPI_Isend( recvbuf.data()+local_offsets[i][j], local_counts[i][j] , pkp_type, i , 3+j ,MPI_COMM_WORLD,&sendreqs[i][j]);
+            if(i>0){
+                MPI_Isend( local_counts[i].data(), global_bucket_subranges[i].size() , MPI_UINT64_T, i , 1 , MPI_COMM_WORLD, &reqs[i][2]);
+                MPI_Isend( local_bytes[i].data(), global_bucket_subranges[i].size() , MPI_UINT64_T, i , 2 , MPI_COMM_WORLD, &reqs[i][3]);
+                sendreqs[i].resize(global_bucket_subranges[i].size());
+                for(int j=0;j<global_bucket_subranges[i].size();j++){
+                    MPI_Isend( recvbuf.data()+local_offsets[i][j], local_counts[i][j] , pkp_type, i , 3+j ,MPI_COMM_WORLD,&sendreqs[i][j]);
+                }
             }
         }
 
-        local_counts[0].resize(global_bucket_subranges[0].size());
-        local_bytes[0].resize(global_bucket_subranges[0].size());
-        local_offsets[0].resize(global_bucket_subranges[0].size());
-
+        //local_counts[0].resize(global_bucket_subranges[0].size());
+        //local_bytes[0].resize(global_bucket_subranges[0].size());
+        //local_offsets[0].resize(global_bucket_subranges[0].size());
+        
         uint64_t offset_acc=0;
-
+        
         for(int j=0;j<global_bucket_subranges[0].size();j++){
-            rank_counts[j]=global_bucket_subranges[0][j].second-global_bucket_subranges[0][j].first;
-            rank_bytes[j]=global_buckets_bytes[0][j];
+            rank_counts[j]=local_counts[0][j];
+            rank_bytes[j]=local_bytes[0][j];
             rank_offsets[j]=offset_acc;
             offset_acc+=rank_counts[j];
         }
@@ -351,9 +357,13 @@ int main(int argc,char*argv[]) noexcept{
         for(int j=0;j<global_bucket_subranges[0].size();j++){
             rank_count+=rank_counts[j];
         }
-        #pragma omp parallel for shared(rank_result)
+        //#pragma omp parallel for shared(rank_result)
         for(int j=0;j<global_bucket_subranges[0].size();j++){
+            for(size_t k=global_bucket_subranges[0][j].first;k<global_bucket_subranges[0][j].second;k++){
+                std::cout<< "--" <<recvbuf[k].key << std::endl;
+            }
             std::memcpy( rank_result.data()+rank_offsets[j],recvbuf.data()+global_bucket_subranges[0][j].first,rank_counts[j]*sizeof(PosKeyPair));
+            
         }
     }else{
         std::vector<MPI_Request> requests(nprocs);
@@ -378,6 +388,9 @@ int main(int argc,char*argv[]) noexcept{
     for(int i=0;i<nprocs;i++){
         pairs.push_back(IndexPair(rank_offsets[i],rank_offsets[i]+rank_counts[i]));
         offset_acc+=rank_counts[i];
+    }
+    for(const auto& pkp:rank_result){
+        std::cout<< rank << " " << pkp.key << std::endl;
     }
     std::vector<uint64_t> file_pivots(std::max(threads_num-1,1UL));
     #pragma omp parallel for shared(pivots) shared(sorted_ranges) schedule(static)
