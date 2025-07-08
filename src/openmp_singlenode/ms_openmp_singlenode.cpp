@@ -102,7 +102,6 @@ int main(int argc,char*argv[]) noexcept{
     #pragma omp parallel for shared(pos_key_data,final_result) shared(bucket_subranges) schedule(static)
     for(int i=0;i<threads_num;i++){
             k_way_merge_buffer(pos_key_data.data(),bucket_subranges[i],final_result.data()+merge_offsets[i],total_sizes[i]);
-            //merged_ranges[i]=std::move(k_way_merge_heap(pos_key_data,bucket_subranges[i]));
             size_t local_bytes=0;
             #pragma omp simd reduction(+:local_bytes)
             for(size_t j=0;j<total_sizes[i];j++){
@@ -133,7 +132,6 @@ int main(int argc,char*argv[]) noexcept{
             total_sizes[i],payload_max,payload_thread_max
         );
     }
-    //openmp implementation
     auto end_time = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
     std::cout << "time(ms):" << duration.count() << std::endl;
