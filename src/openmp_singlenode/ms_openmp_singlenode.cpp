@@ -60,7 +60,7 @@ int main(int argc,char*argv[]) noexcept{
     for(int i=0;i<threads_num;i++){
         const int start=sorted_ranges[i].first;
         const int end=sorted_ranges[i].second;
-        radix_sort_slice(pos_key_data,start,end);
+        radix_sort_buffer(pos_key_data.data()+start,end-start);
     }
 
     // estimating  the ranks using ms_select
@@ -72,52 +72,44 @@ int main(int argc,char*argv[]) noexcept{
         pivots[i-1]=ms_select2(pos_key_data,sorted_ranges,rank);
     }
     
-    std::vector<std::vector<IndexPair>> bucket_subranges(threads_num);
-    
+    std::vector<std::vector<IndexPair>> bucket_subranges(threads_num,std::vector<IndexPair>(threads_num));
+    #pragma omp parallel for shared(pos_key_data)
     for (size_t j=0;j<sorted_ranges.size();++j) {
         const size_t start=sorted_ranges[j].first;
         const size_t end=sorted_ranges[j].second;
-        auto begin_it = pos_key_data.begin() + start;
-        auto end_it = pos_key_data.begin() + end;
-
-        size_t last_idx = start;
-
-        for (size_t b = 0; b < threads_num; ++b) {
-            auto low = pos_key_data.begin() + last_idx;
-            
-            auto high = (b < pivots.size())
-            ? std::upper_bound(low, end_it, pivots[b],
-                [](uint64_t val, const PosKeyPair& elem) {
-                    return val < elem.key;
-                })
-                : end_it;
-                
-            if (low < high) {
-                bucket_subranges[b].emplace_back(low - pos_key_data.begin(), high - pos_key_data.begin());
-            }
-                
-            last_idx = high - pos_key_data.begin();
-            if (last_idx >= end) break;
+        build_pivot_subrange(start,end,j,pivots,pos_key_data,bucket_subranges);
+    }
+    std::vector<size_t> merge_offsets(threads_num);
+    std::vector<size_t> total_sizes(threads_num);
+    for(int i=0;i<threads_num;i++){
+        size_t total_size = 0;
+        for (const auto& range : bucket_subranges[i]) {
+            total_size += (range.second - range.first);
         }
-        
+        total_sizes[i]=total_size;
     }
     
-    
+    size_t merge_offset=0;
+    for(int i=0;i<threads_num;i++){
+        merge_offsets[i]=merge_offset;
+        merge_offset+=total_sizes[i];
+    }
     PosKeyVec result;
     std::vector<PosKeyVec> merged_ranges(threads_num);
     std::vector<size_t> bytes_nums(threads_num);
     const unsigned int payload_header_size=sizeof(uint64_t)+sizeof(uint64_t);
-    #pragma omp parallel for shared(pos_key_data) shared(bucket_subranges) schedule(static)
+    std::vector<PosKeyPair> final_result(pos_key_data.size());
+    #pragma omp parallel for shared(pos_key_data,final_result) shared(bucket_subranges) schedule(static)
     for(int i=0;i<threads_num;i++){
-            merged_ranges[i]=std::move(k_way_merge_heap(pos_key_data,bucket_subranges[i]));
+            k_way_merge_buffer(pos_key_data.data(),bucket_subranges[i],final_result.data()+merge_offsets[i],total_sizes[i]);
+            //merged_ranges[i]=std::move(k_way_merge_heap(pos_key_data,bucket_subranges[i]));
             size_t local_bytes=0;
             #pragma omp simd reduction(+:local_bytes)
-            for(size_t j=0;j<merged_ranges[i].size();j++){
-                local_bytes+=payload_header_size+merged_ranges[i][j].len;
+            for(size_t j=0;j<total_sizes[i];j++){
+                local_bytes+=payload_header_size+final_result[merge_offsets[i]+j].len;
             }
             bytes_nums[i]=local_bytes;
     }
-    
     std::ifstream in_file(in_filename,std::ifstream::binary | std::ifstream::ate);
     size_t file_size= in_file.tellg();
     in_file.close();
@@ -135,50 +127,11 @@ int main(int argc,char*argv[]) noexcept{
     
     #pragma omp parallel for schedule(static)
     for (int i = 0; i < threads_num; ++i) {
-        size_t thread_offset = offsets[i];                  // Start of this thread's output region
-        const auto& pkp_list = merged_ranges[i];            // Sorted records for this thread
-        std::ifstream in_file(in_filename, std::ios::binary);
-        
-        char* payload_buf=new char[payload_max];                      // Input record buffer
-        char* out_buf=new char[payload_thread_max];                   // Output write buffer
-        size_t out_pos = 0;                                 // Current write buffer position
-        
-        int fd = open(out_filename.c_str(), O_RDWR);
-        if (fd < 0) {
-            perror("open");
-            continue;
-        }
-
-        for (size_t j=0;j<pkp_list.size();++j) {
-            in_file.seekg(pkp_list[j].offset + sizeof(uint64_t) + sizeof(uint64_t));
-            in_file.read(payload_buf, pkp_list[j].len);
-            size_t record_size = sizeof(pkp_list[j].key) + sizeof(pkp_list[j].len) + pkp_list[j].len;
-            if (out_pos + record_size > payload_thread_max) {
-                ssize_t written = pwrite(fd, out_buf, out_pos, thread_offset);
-                if (written < 0) {
-                    perror("pwrite");
-                    break;
-                }
-                thread_offset += written;
-                out_pos = 0;
-            }
-            std::memcpy(out_buf + out_pos, &pkp_list[j].key, sizeof(pkp_list[j].key));
-            out_pos += sizeof(pkp_list[j].key);
-            std::memcpy(out_buf + out_pos, &pkp_list[j].len, sizeof(pkp_list[j].len));
-            out_pos += sizeof(pkp_list[j].len);
-            std::memcpy(out_buf + out_pos, payload_buf, pkp_list[j].len);
-            out_pos += pkp_list[j].len;
-        }
-        if (out_pos > 0) {
-            ssize_t written = pwrite(fd, out_buf, out_pos, thread_offset);
-            if (written < 0) {
-                perror("pwrite");
-            }
-        }
-        delete out_buf;
-        delete payload_buf;
-        in_file.close();
-        close(fd);
+        buffered_poskey_write(
+            in_filename,out_filename,
+            offsets[i],final_result.data()+merge_offsets[i],
+            total_sizes[i],payload_max,payload_thread_max
+        );
     }
     //openmp implementation
     auto end_time = std::chrono::high_resolution_clock::now();
