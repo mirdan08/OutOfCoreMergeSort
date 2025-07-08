@@ -10,8 +10,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <unistd.h>
-#include <omp.h>
 #include <fcntl.h>
+#include <omp.h>
 #include <queue>
 #include <numeric>
 #include <mpi.h>
@@ -31,78 +31,6 @@ MPI_Datatype create_poskeypair_type() {
     MPI_Type_commit(&type);
     return type;
 }
-void inline build_pivot_subrange(
-    size_t start,size_t end, int j,
-    const std::vector<uint64_t>& pivots,
-    const std::vector<PosKeyPair>& data,
-    std::vector<std::vector<IndexPair>>& bucket_subranges 
-){
-    auto begin_it = data.begin() + start;
-    auto end_it = data.begin() + end;
-    size_t last_idx = start;
-    for (size_t b = 0; b < pivots.size()+1; ++b) {
-        auto low = data.begin() + last_idx;
-        
-        auto high = (b < pivots.size())
-        ? std::upper_bound(low, end_it, pivots[b],
-            [](uint64_t val, const PosKeyPair& elem) {
-                return val < elem.key;
-            })
-            : end_it;
-        bucket_subranges[b][j]=IndexPair(low - data.begin(), high - data.begin());
-        last_idx = high - data.begin();
-        if (last_idx >= end) break;
-    }
-}
-
-void buffered_poskey_write(const std::string in_filename,const std::string out_filename,size_t file_offset,PosKeyPair* data,size_t data_count,size_t payload_max,size_t memory_limit){
-    size_t thread_offset = file_offset;                  // Start of this thread's output region
-    const auto& pkp_list = data;            // Sorted records for this thread
-    std::ifstream in_file(in_filename, std::ios::binary);
-    
-    char* payload_buf=new char[payload_max];                      // Input record buffer
-    char* out_buf=new char[memory_limit];                   // Output write buffer
-    size_t out_pos = 0;                                 // Current write buffer position
-    
-    int fd = open(out_filename.c_str(), O_RDWR);
-    if (fd < 0) {
-        perror("open");
-        return;
-    }
-    
-    for (size_t j=0;j<data_count;++j) {
-        in_file.seekg(pkp_list[j].offset + sizeof(uint64_t) + sizeof(uint64_t));
-        in_file.read(payload_buf, pkp_list[j].len);
-        size_t record_size = sizeof(pkp_list[j].key) + sizeof(pkp_list[j].len) + pkp_list[j].len;
-        if (out_pos + record_size > memory_limit) {
-            ssize_t written = pwrite(fd, out_buf, out_pos, thread_offset);
-            if (written < 0) {
-                perror("pwrite");
-                break;
-            }
-            thread_offset += written;
-            out_pos = 0;
-        }
-        std::memcpy(out_buf + out_pos, &pkp_list[j].key, sizeof(pkp_list[j].key));
-        out_pos += sizeof(pkp_list[j].key);
-        std::memcpy(out_buf + out_pos, &pkp_list[j].len, sizeof(pkp_list[j].len));
-        out_pos += sizeof(pkp_list[j].len);
-        std::memcpy(out_buf + out_pos, payload_buf, pkp_list[j].len);
-        out_pos += pkp_list[j].len;
-    }
-    
-    if (out_pos > 0) {
-        ssize_t written = pwrite(fd, out_buf, out_pos, thread_offset);
-        if (written < 0) {
-            perror("pwrite");
-        }
-    }
-    delete out_buf;
-    delete payload_buf;
-    in_file.close();
-    close(fd);
-}
-
 int main(int argc,char*argv[]) noexcept{
     uint64_t records_num=0;
     size_t threads_num=0;
@@ -232,9 +160,6 @@ int main(int argc,char*argv[]) noexcept{
         recvbuf.data(),sendcounts.data(),displs.data(),pkp_type,
         0,MPI_COMM_WORLD
     );
-    for(const auto& pkp:recvbuf){
-        std::cout<< "from 0 "<< pkp.key << std::endl;
-    }
 
     std::vector<uint64_t> buckets_bytes(nprocs);
     std::vector<PosKeyVec> final_data(nprocs);
@@ -339,10 +264,6 @@ int main(int argc,char*argv[]) noexcept{
                 }
             }
         }
-
-        //local_counts[0].resize(global_bucket_subranges[0].size());
-        //local_bytes[0].resize(global_bucket_subranges[0].size());
-        //local_offsets[0].resize(global_bucket_subranges[0].size());
         
         uint64_t offset_acc=0;
         
@@ -357,13 +278,10 @@ int main(int argc,char*argv[]) noexcept{
         for(int j=0;j<global_bucket_subranges[0].size();j++){
             rank_count+=rank_counts[j];
         }
-        //#pragma omp parallel for shared(rank_result)
+
+        #pragma omp parallel for shared(rank_result)
         for(int j=0;j<global_bucket_subranges[0].size();j++){
-            for(size_t k=global_bucket_subranges[0][j].first;k<global_bucket_subranges[0][j].second;k++){
-                std::cout<< "--" <<recvbuf[k].key << std::endl;
-            }
             std::memcpy( rank_result.data()+rank_offsets[j],recvbuf.data()+global_bucket_subranges[0][j].first,rank_counts[j]*sizeof(PosKeyPair));
-            
         }
     }else{
         std::vector<MPI_Request> requests(nprocs);
@@ -379,7 +297,6 @@ int main(int argc,char*argv[]) noexcept{
         for(int i=0;i<nprocs;i++){
             MPI_Irecv( rank_result.data()+rank_offsets[i] , rank_counts[i] , pkp_type, 0 , 3+i, MPI_COMM_WORLD,&requests[i]);
         }
-
         MPI_Waitall( nprocs , requests.data() ,MPI_STATUSES_IGNORE);
     }
     const size_t payload_thread_max=memory_limit/threads_num;
@@ -389,9 +306,6 @@ int main(int argc,char*argv[]) noexcept{
         pairs.push_back(IndexPair(rank_offsets[i],rank_offsets[i]+rank_counts[i]));
         offset_acc+=rank_counts[i];
     }
-    for(const auto& pkp:rank_result){
-        std::cout<< rank << " " << pkp.key << std::endl;
-    }
     std::vector<uint64_t> file_pivots(std::max(threads_num-1,1UL));
     #pragma omp parallel for shared(pivots) shared(sorted_ranges) schedule(static)
     for(int i=1;i<=file_pivots.size();i++){
@@ -399,7 +313,6 @@ int main(int argc,char*argv[]) noexcept{
         file_pivots[i-1]=ms_select2(rank_result,pairs,desired_rank);
     }
 
-    
     std::vector<std::vector<IndexPair>> rank_bucket_subranges(threads_num,std::vector<IndexPair>(pairs.size()));
 
     #pragma omp parallel for shared(rank_bucket_subranges)

@@ -6,6 +6,16 @@
 #include <cstring>
 #include <cassert>
 #include <queue>
+#include <chrono>
+#include <vector>
+#include <algorithm>
+#include <fstream>
+#include <memory>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <unistd.h>
+#include <fcntl.h>
 
 Record* read_record(std::ifstream& in_file){
     auto r=std::make_unique<Record>();
@@ -393,4 +403,78 @@ void radix_sort_slice(PosKeyVec& data, size_t start, size_t end) noexcept {
     PosKeyVec slice(data.begin() + start, data.begin() + end);
     radix_sort_by_key(slice);
     std::copy(slice.begin(), slice.end(), data.begin() + start);
+}
+
+void build_pivot_subrange(
+    size_t start,size_t end, int j,
+    const std::vector<uint64_t>& pivots,
+    const std::vector<PosKeyPair>& data,
+    std::vector<std::vector<IndexPair>>& bucket_subranges 
+){
+    size_t last_idx =start;
+    for (size_t b = 0; b < pivots.size()+1; ++b) {
+        /* auto low = data.begin() + last_idx;
+        
+        auto high = (b < pivots.size())
+        ? 
+        std::upper_bound(low, end_it, pivots[b],
+            [](uint64_t val, const PosKeyPair& elem) {
+                return val < elem.key;
+            })
+            : end_it;
+        bucket_subranges[b][j]=IndexPair(low - data.begin(), high - data.begin()); */
+        //last_idx = high - data.begin();
+        auto high= (b < pivots.size()) ? raw_upper_bound(data.data()+last_idx,end-last_idx,pivots[b])+last_idx:end;
+        bucket_subranges[b][j]=IndexPair(last_idx,high);
+        last_idx = high;
+        if (last_idx >= end) break;
+    }
+}
+
+void buffered_poskey_write(const std::string in_filename,const std::string out_filename,size_t file_offset,PosKeyPair* data,size_t data_count,size_t payload_max,size_t memory_limit){
+    size_t thread_offset = file_offset;                  // Start of this thread's output region
+    const auto& pkp_list = data;            // Sorted records for this thread
+    std::ifstream in_file(in_filename, std::ios::binary);
+    
+    char* payload_buf=new char[payload_max];                      // Input record buffer
+    char* out_buf=new char[memory_limit];                   // Output write buffer
+    size_t out_pos = 0;                                 // Current write buffer position
+    
+    int fd = open(out_filename.c_str(), O_RDWR);
+    if (fd < 0) {
+        perror("open");
+        return;
+    }
+    
+    for (size_t j=0;j<data_count;++j) {
+        in_file.seekg(pkp_list[j].offset + sizeof(uint64_t) + sizeof(uint64_t));
+        in_file.read(payload_buf, pkp_list[j].len);
+        size_t record_size = sizeof(pkp_list[j].key) + sizeof(pkp_list[j].len) + pkp_list[j].len;
+        if (out_pos + record_size > memory_limit) {
+            ssize_t written = pwrite(fd, out_buf, out_pos, thread_offset);
+            if (written < 0) {
+                perror("pwrite");
+                break;
+            }
+            thread_offset += written;
+            out_pos = 0;
+        }
+        std::memcpy(out_buf + out_pos, &pkp_list[j].key, sizeof(pkp_list[j].key));
+        out_pos += sizeof(pkp_list[j].key);
+        std::memcpy(out_buf + out_pos, &pkp_list[j].len, sizeof(pkp_list[j].len));
+        out_pos += sizeof(pkp_list[j].len);
+        std::memcpy(out_buf + out_pos, payload_buf, pkp_list[j].len);
+        out_pos += pkp_list[j].len;
+    }
+    
+    if (out_pos > 0) {
+        ssize_t written = pwrite(fd, out_buf, out_pos, thread_offset);
+        if (written < 0) {
+            perror("pwrite");
+        }
+    }
+    delete out_buf;
+    delete payload_buf;
+    in_file.close();
+    close(fd);
 }

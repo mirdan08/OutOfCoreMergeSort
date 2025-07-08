@@ -69,3 +69,10 @@ std::vector<PosKeyPair> k_way_merge_heap(
 ) noexcept ;
 
 void radix_sort_slice(PosKeyVec& data, size_t start, size_t end) noexcept ;
+void buffered_poskey_write(const std::string in_filename,const std::string out_filename,size_t file_offset,PosKeyPair* data,size_t data_count,size_t payload_max,size_t memory_limit);
+void build_pivot_subrange(
+    size_t start,size_t end, int j,
+    const std::vector<uint64_t>& pivots,
+    const std::vector<PosKeyPair>& data,
+    std::vector<std::vector<IndexPair>>& bucket_subranges 
+);
