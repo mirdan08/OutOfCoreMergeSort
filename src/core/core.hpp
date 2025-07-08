@@ -52,6 +52,7 @@ uint64_t ms_select2(const std::vector<PosKeyPair>& data,
     const std::vector<std::pair<size_t, size_t>>& sorted_ranges,
     size_t global_rank) noexcept ;
 
+size_t raw_upper_bound(const PosKeyPair* data, size_t size, uint64_t value) noexcept;
 void k_way_merge_buffer(
         PosKeyPair* src_data,
         std::vector<IndexPair>& subranges,

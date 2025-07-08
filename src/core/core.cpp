@@ -169,6 +169,21 @@ using PosKeyVec=std::vector<PosKeyPair>;
 using IndexPair=std::pair<unsigned long,unsigned long>;
 using SortResult=std::tuple<unsigned long,unsigned long,unsigned long>;
 
+size_t raw_upper_bound(const PosKeyPair* data, size_t size, uint64_t value) noexcept {
+    size_t low = 0, high = size;
+
+    while (low < high) {
+        size_t mid = low + ((high - low) >> 1);
+        uint64_t mid_val = data[mid].key;
+
+        size_t mask = -(mid_val <= value);
+
+        low  = (mask & (mid + 1)) | (~mask & low);
+        high = (mask & high)      | (~mask & mid);
+    }
+    return low;
+}
+
 uint64_t ms_select2(const std::vector<PosKeyPair>& data,
     const std::vector<std::pair<size_t, size_t>>& sorted_ranges,
     size_t global_rank) noexcept {
@@ -184,13 +199,15 @@ uint64_t ms_select2(const std::vector<PosKeyPair>& data,
         for (size_t j=0;j<sorted_ranges.size();++j) {
             const size_t start=sorted_ranges[j].first;
             const size_t end=sorted_ranges[j].second;
-            auto it = std::upper_bound(
+            auto it=raw_upper_bound(data.data()+start,end-start,mid);
+            rank+=it;
+            /* auto it = std::upper_bound(
             data.begin() + start, data.begin() + end, mid,
-            [](uint64_t value, const PosKeyPair& elem) {
-                return value < elem.key;
-            }
-        );
-            rank += (it - (data.begin() + start));
+                [](uint64_t value, const PosKeyPair& elem) {
+                    return value < elem.key;
+                }
+            );
+            rank += (it - (data.begin() + start)); */
         }
 
         if (rank <= global_rank) {
