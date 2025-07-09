@@ -3,7 +3,7 @@ MPICXX     = mpicxx
 
 CXXFLAGS= -std=c++20 -fopenmp
 
-INCLUDES   = -Iinclude/fastflow/ -Isrc/
+INCLUDES   = -Iinclude/fastflow/ -Isrc/ -Isrc/utils/
 LDFLAGS    = -pthread -Wall -Wextra
 OPTFLAGS   = -ffast-math -O3 -ftree-vectorize -DNDEBUG
 
