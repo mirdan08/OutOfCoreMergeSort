@@ -31,8 +31,10 @@ int main(int argc,char*argv[]){
         std::cout << "please specify the output file path" << std::endl;
         return 1;
     }
+    std::cout<<"starting from " << in_filename << " to "<< out_filename << " with a limit of "<< memory_limit <<std::endl;
     auto start_time = std::chrono::high_resolution_clock::now();
-
+    std::cout<< "before read" << std::endl;
+    
     std::vector<PosKeyPair> pos_key_data=read_records(in_filename,memory_limit);
     if (verbose){
         unsigned int i=0;
@@ -40,11 +42,12 @@ int main(int argc,char*argv[]){
             std::cout<< i++ << "\t[" << pkp.pos << ":" << pkp.key << "]" << std::endl;
         }
     }
+    std::cout<< "start sorting" << std::endl;
     std::sort(
         pos_key_data.begin(),pos_key_data.end(),
         [](const PosKeyPair& a,const PosKeyPair& b){return a.key<b.key;}
     );
-
+    std::cout<< "end sorting" << std::endl;
     const unsigned int payload_header_size=sizeof(uint64_t)+sizeof(uint64_t);
     std::ofstream out_file(out_filename,std::ofstream::binary);
 
@@ -78,6 +81,7 @@ int main(int argc,char*argv[]){
         out_pos += sizeof(pkp.len);
         std::memcpy(out_buf + out_pos, payload_buf, pkp.len);
         out_pos += pkp.len;
+
     }
     if (out_pos > 0) {
         ssize_t written = pwrite(fd, out_buf, out_pos, offset);

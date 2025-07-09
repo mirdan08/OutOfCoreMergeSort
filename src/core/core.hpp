@@ -17,7 +17,7 @@
 const unsigned long payload_max= RPAYLOAD_MAX;
 
 //default max memory limit for single node
-const unsigned long MAX_MEMORY_LIMIT=3359738368;
+const unsigned long MAX_MEMORY_LIMIT=16UL*1024UL*1024UL*1024UL;
 //a single record struct
 struct Record {
     uint32_t len; 

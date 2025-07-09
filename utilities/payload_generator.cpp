@@ -5,12 +5,11 @@
 #include <cstdint>
 #include <cstring>
 #include <chrono>
-#include<getopt.h>
-
+#include <getopt.h>
+#include <utils/utils.hpp>
 struct RecordHeader {
     uint32_t len;
     uint64_t key;
-    // payload[] follows
 };
 
 int main(int argc,char*argv[]) {
@@ -19,10 +18,12 @@ int main(int argc,char*argv[]) {
     size_t payload_max=0;
     size_t records_count=0;
     bool verbose;
-    while ((opt = getopt(argc, argv, "v:o:p:r:")) != -1) {
+    bool debug=false;
+    size_t memory_limit=3359738368;
+    while ((opt = getopt(argc, argv, "v:o:p:r:d:")) != -1) {
         switch (opt) {
             case 'p': {
-                payload_max = std::stoi(optarg);
+                payload_max = std::stoul(optarg);
                 break;
             }
             case 'v':{
@@ -35,8 +36,12 @@ int main(int argc,char*argv[]) {
                 break;
             }
             case 'r':{
-                records_count = std::stoi(optarg);
+                records_count = std::stoul(optarg);
                 break;
+            }
+            case 'd':{
+                int d = std::stoi(optarg);
+                debug= (d>0?true:false);
             }
             default:{
                 std::cout << "wrong arguments" << std::endl;
@@ -60,6 +65,16 @@ int main(int argc,char*argv[]) {
         std::cerr << "records count must be >0.\n";
         return 1;
     }
+
+/*     if(debug){
+        const auto recs=read_records(out_path,memory_limit);
+        size_t i=0;
+        for(const auto& pkp:recs){
+            std::cout<< i << " " << pkp.key << "-" << pkp.len << std::endl;
+        }
+        std::cout<< "sorted "<< std::is_sorted(recs.begin(),recs.end(),[](const auto& a,const auto& b){return a.key<b.key;}) << std::endl;
+    } */
+
     std::cout << "beggining to write '" << out_path << "' with " << records_count << " records and max payload "<< payload_max <<"."<< std::endl;
     // Write PAYLOAD_MAX
     //out_file.write(reinterpret_cast<const char*>(&payload_max), sizeof(uint64_t));

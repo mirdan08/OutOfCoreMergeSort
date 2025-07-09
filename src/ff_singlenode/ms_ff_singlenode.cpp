@@ -37,7 +37,7 @@ struct SortingWorker: public ff::ff_monode_t<IndexPair,IndexPair>{
                     data.begin()+in->first,data.begin()+in->second,
                     [](const PosKeyPair& a,const PosKeyPair& b){return a.key<b.key;}
                 );
-
+        radix_sort_buffer(data.data()+(in->first),in->second-in->first);
         return in;
     }
     private:
@@ -52,7 +52,7 @@ struct SelectWorker : ff::ff_node_t<int,uint64_t> {
 
     uint64_t* svc(int* task) {
         int k = *task;
-        uint64_t* result = new uint64_t(ms_select(data, ranges, k));
+        uint64_t* result = new uint64_t(ms_select2(data, ranges, k));
         //delete task;
         return result;
     }
@@ -78,17 +78,15 @@ struct SelectCollector : ff::ff_minode_t<uint64_t,void> {
 
         //delete task;
         if (pivots.size() == p - 1) {
-            std::sort(pivots.begin(), pivots.end());
-            std::vector<std::vector<IndexPair>*> bucket_subranges(p);
-            for (size_t i = 0; i < p; ++i) {
-                bucket_subranges[i] = new std::vector<IndexPair>();
-            }
+            //std::sort(pivots.begin(), pivots.end());
+
+            std::vector<std::vector<IndexPair>> bucket_subranges(p,std::vector<IndexPair>(p));
             
-            for (const auto& [start_idx, end_idx] : ranges) {
-                auto begin_it = data.begin() + start_idx;
-                auto end_it = data.begin() + end_idx;
-                
-                size_t last_idx = start_idx;
+            for (int j=0;j<ranges.size();j++) {
+                auto begin_it = data.begin() + ranges[j].first;
+                auto end_it = data.begin() + ranges[j].second;
+                build_pivot_subrange(ranges[j].first,ranges[j].second,j,pivots,data,bucket_subranges);
+                /* size_t last_idx = start_idx;
                 
                 for (size_t b = 0; b < p; ++b) {
                     auto low = data.begin() + last_idx;
@@ -106,12 +104,13 @@ struct SelectCollector : ff::ff_minode_t<uint64_t,void> {
                     
                     last_idx = high - data.begin();
                     if (last_idx >= end_idx) break;
-                }
+                } */
                     
             }
             
             for (size_t b = 0; b < p; ++b) {
-                ff_send_out(bucket_subranges[b]);
+                const auto& range=bucket_subranges[b];
+                ff_send_out(new std::vector<IndexPair>(std::move(range)));
             }
             return EOS;
         }
@@ -128,7 +127,14 @@ PosKeyVec
     SubMergeWorker(PosKeyVec& data):data(data){}
     
     PosKeyVec* svc(std::vector<IndexPair>* task) {
-        PosKeyVec* merged = new PosKeyVec(std::move(k_way_merge_from_ranges(data, *task)));
+        size_t size=0;
+        for(const auto& p:*task){
+            size+=p.second-p.first;
+        }
+        PosKeyVec* merged=new PosKeyVec(size);
+
+        k_way_merge_buffer(data.data(),*task,merged->data(),size);
+        //PosKeyVec* merged = new PosKeyVec(std::move(k_way_merge_from_ranges(data, *task)));
         //delete task;
         // Process or store `merged` as needed
         return merged;
@@ -198,11 +204,13 @@ int
     size_t num_workers;
     std::string out_filename;
     std::string in_filename;
-    FileWriter(std::string in_filename,std::string out_filename,size_t num_workers):out_filename(out_filename),in_filename(in_filename),num_workers(num_workers){};
+    size_t memory_limit;
+    FileWriter(std::string in_filename,std::string out_filename,size_t num_workers,size_t memory_limit)
+    :out_filename(out_filename),in_filename(in_filename),num_workers(num_workers),memory_limit(memory_limit){};
     int* svc(std::pair<size_t,PosKeyVec*>* in){
         size_t byte_offset=in->first;
-
-        PosKeyVec* merged_result=in->second;
+        buffered_poskey_write(in_filename,out_filename,byte_offset,in->second->data(),in->second->size(),payload_max,memory_limit);
+        /* PosKeyVec* merged_result=in->second;
 
         int fd = open(out_filename.c_str(),O_RDWR);
         if (fd < 0) {
@@ -221,7 +229,7 @@ int
             byte_offset+=sizeof(pkp.key)+sizeof(pkp.len)+pkp.len;
         }
         in_file.close();
-        close(fd);
+        close(fd); */
         return new int(byte_offset);
     }
 };
@@ -243,7 +251,7 @@ struct SelectEmitter : ff::ff_node_t<int,int> {
 void sort_with_ff(
     PosKeyVec& data,std::string in_filename,std::string out_filename,
     size_t sorting_workers,size_t num_workers,
-    PosKeyVec& result
+    PosKeyVec& result,size_t memory_limit
 ){
     std::vector<IndexPair> sorted_ranges;
     size_t chunk_base = data.size() / num_workers;
@@ -288,8 +296,9 @@ void sort_with_ff(
     ff::ff_farm writing_farm;
 
     std::vector<ff::ff_node* > writer_worker;
+
     for(int i=0;i<sorting_workers;i++){
-        writer_worker.push_back(new FileWriter(in_filename,out_filename,num_workers));
+        writer_worker.push_back(new FileWriter(in_filename,out_filename,num_workers,memory_limit));
     }
     writing_farm.add_workers(writer_worker);
 
@@ -338,7 +347,8 @@ int main(int argc,char*argv[]){
     sort_with_ff(
         pos_key_data,in_filename,out_filename,
         num_workers,num_workers,
-        result
+        result,
+        memory_limit
     );
 
     auto end_time = std::chrono::high_resolution_clock::now();

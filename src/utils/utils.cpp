@@ -2,7 +2,7 @@
 
 bool parse_cli_args(int argc,char*argv[],size_t& threads_num,bool& verbose,std::string& in_filename,std::string& out_filename,size_t& memory_limit){
     int opt;
-    while ((opt = getopt(argc, argv, "t:v:i:o:")) != -1) {
+    while ((opt = getopt(argc, argv, "t:v:i:o:m:")) != -1) {
         switch (opt) {
             case 't': {
                 threads_num = std::stoi(optarg);
@@ -45,18 +45,18 @@ std::vector<PosKeyPair> read_records(std::string& file_path,const unsigned long 
     in_file.seekg(0);
     unsigned long records_count=0;
     //if file is smaller than available memory we just load it
-    const unsigned int buffer_size= std::min(memory_limt,(unsigned long)file_size);
+    const unsigned long buffer_size= std::min(memory_limt,(unsigned long)file_size);
     char* buffer=new char[buffer_size];
-    const unsigned int payload_header_size=sizeof(uint64_t)+sizeof(uint64_t);
+    const unsigned long payload_header_size=sizeof(uint64_t)+sizeof(uint64_t);
     // we read only keys and store the indexes to apply std::sort
-    unsigned int buffer_offset=0;
-    unsigned int record_offset=0;
-    unsigned int bytes_read=0;
+    unsigned long buffer_offset=0;
+    unsigned long record_offset=0;
+    unsigned long bytes_read=0;
     while(bytes_read<file_size){
-        unsigned int buffer_start=buffer_offset;
+        unsigned long buffer_start=buffer_offset;
         record_offset=0;
         //avoid reading over the buffer length
-        unsigned int buffer_length=std::min(buffer_size,(uint)file_size-buffer_start);
+        unsigned long buffer_length=std::min(buffer_size,(uint)file_size-buffer_start);
         in_file.seekg(buffer_start);
         in_file.read(buffer,buffer_length);
         //Note: header is not read in the buffer
