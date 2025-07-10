@@ -38,7 +38,7 @@ int main(int argc,char*argv[]) noexcept{
     auto start_time = std::chrono::high_resolution_clock::now();
     std::vector<PosKeyPair> pos_key_data= std::move(read_records(in_filename,memory_limit));
     if (verbose){
-        unsigned int i=0;
+        size_t i=0;
         for(const auto& pkp:pos_key_data){
             std::cout<< i++ << "\t[" << pkp.pos << ":" << pkp.key << "]" << std::endl;
         }
@@ -68,7 +68,7 @@ int main(int argc,char*argv[]) noexcept{
     
     #pragma omp parallel for shared(pivots) shared(sorted_ranges) schedule(static)
     for(int i=1;i<=pivots.size();i++){
-        int rank=i*(pos_key_data.size()/threads_num);
+        size_t rank=i*(pos_key_data.size()/threads_num);
         pivots[i-1]=ms_select2(pos_key_data,sorted_ranges,rank);
     }
     
@@ -97,7 +97,7 @@ int main(int argc,char*argv[]) noexcept{
     PosKeyVec result;
     std::vector<PosKeyVec> merged_ranges(threads_num);
     std::vector<size_t> bytes_nums(threads_num);
-    const unsigned int payload_header_size=sizeof(uint64_t)+sizeof(uint64_t);
+    const unsigned long payload_header_size=sizeof(uint64_t)+sizeof(uint64_t);
     std::vector<PosKeyPair> final_result(pos_key_data.size());
     #pragma omp parallel for shared(pos_key_data,final_result) shared(bucket_subranges) schedule(static)
     for(int i=0;i<threads_num;i++){

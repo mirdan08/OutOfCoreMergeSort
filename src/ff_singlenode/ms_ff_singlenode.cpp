@@ -86,6 +86,7 @@ struct SelectCollector : ff::ff_minode_t<uint64_t,void> {
                 auto begin_it = data.begin() + ranges[j].first;
                 auto end_it = data.begin() + ranges[j].second;
                 build_pivot_subrange(ranges[j].first,ranges[j].second,j,pivots,data,bucket_subranges);
+                
                 /* size_t last_idx = start_idx;
                 
                 for (size_t b = 0; b < p; ++b) {
