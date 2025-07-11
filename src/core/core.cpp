@@ -353,6 +353,7 @@ void radix_sort_by_key(PosKeyVec& data) noexcept {
         std::swap(data, buffer);
     }
 }
+
 void radix_sort_buffer(PosKeyPair* data, size_t n) {
     constexpr size_t num_bytes = sizeof(uint64_t); // 8 passes for 64-bit keys
     constexpr size_t radix = 256;                  // 8-bit radix per pass
@@ -477,4 +478,82 @@ void buffered_poskey_write(const std::string in_filename,const std::string out_f
     delete payload_buf;
     in_file.close();
     close(fd);
+}
+
+void buffered_poskey_write_pread(
+    const std::string& in_filename,
+    const std::string& out_filename,
+    size_t file_offset,
+    PosKeyPair* data,
+    size_t data_count,
+    size_t payload_max,
+    size_t memory_limit)
+{
+    size_t thread_offset = file_offset;  // Output start offset for this thread
+
+    int in_fd = open(in_filename.c_str(), O_RDONLY);
+    if (in_fd < 0) {
+        perror("open input file");
+        return;
+    }
+
+    int out_fd = open(out_filename.c_str(), O_RDWR);
+    if (out_fd < 0) {
+        perror("open output file");
+        close(in_fd);
+        return;
+    }
+
+    char* payload_buf = new char[payload_max];
+    char* out_buf = new char[memory_limit];
+    size_t out_pos = 0;
+
+    for (size_t j = 0; j < data_count; ++j) {
+        size_t to_read = data[j].len;
+
+        // Read payload directly at offset using pread()
+        ssize_t read_bytes = pread(in_fd, payload_buf, to_read, data[j].offset + sizeof(uint64_t) * 2);
+        if (read_bytes < 0) {
+            perror("pread");
+            break;
+        }
+        if ((size_t)read_bytes != to_read) {
+            fprintf(stderr, "Short read: expected %zu got %zd\n", to_read, read_bytes);
+            break;
+        }
+
+        size_t record_size = sizeof(data[j].key) + sizeof(data[j].len) + to_read;
+
+        // If buffer full, write out
+        if (out_pos + record_size > memory_limit) {
+            ssize_t written = pwrite(out_fd, out_buf, out_pos, thread_offset);
+            if (written < 0) {
+                perror("pwrite");
+                break;
+            }
+            thread_offset += written;
+            out_pos = 0;
+        }
+
+        // Copy key, len, and payload into output buffer
+        std::memcpy(out_buf + out_pos, &data[j].key, sizeof(data[j].key));
+        out_pos += sizeof(data[j].key);
+        std::memcpy(out_buf + out_pos, &data[j].len, sizeof(data[j].len));
+        out_pos += sizeof(data[j].len);
+        std::memcpy(out_buf + out_pos, payload_buf, to_read);
+        out_pos += to_read;
+    }
+
+    // Write any remaining buffered data
+    if (out_pos > 0) {
+        ssize_t written = pwrite(out_fd, out_buf, out_pos, thread_offset);
+        if (written < 0) {
+            perror("pwrite");
+        }
+    }
+
+    delete[] out_buf;
+    delete[] payload_buf;
+    close(in_fd);
+    close(out_fd);
 }

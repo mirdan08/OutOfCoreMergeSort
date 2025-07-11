@@ -24,3 +24,4 @@ void read_payloads_chunk(
     const size_t array_end,
     std::vector<PosKeyPair>& pos_key_data
 );
+std::vector<PosKeyPair> read_records_pread(const std::string& file_path, const unsigned long memory_limit);

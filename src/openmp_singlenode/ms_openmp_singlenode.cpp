@@ -18,8 +18,8 @@ int main(int argc,char*argv[]) noexcept{
     uint64_t records_num=0;
     size_t threads_num=0;
     bool verbose = false;
-    std::string in_filename="";
     std::string out_filename="";
+    std::string in_filename="";
     size_t memory_limit=MAX_MEMORY_LIMIT;
     bool success=parse_cli_args(argc,argv,threads_num,verbose,in_filename,out_filename,memory_limit);
     if(!success){
@@ -36,7 +36,7 @@ int main(int argc,char*argv[]) noexcept{
     }
     omp_set_num_threads(threads_num);
     auto start_time = std::chrono::high_resolution_clock::now();
-    std::vector<PosKeyPair> pos_key_data= std::move(read_records(in_filename,memory_limit));
+    std::vector<PosKeyPair> pos_key_data= std::move(read_records_pread(in_filename,memory_limit));
     if (verbose){
         size_t i=0;
         for(const auto& pkp:pos_key_data){
@@ -55,7 +55,7 @@ int main(int argc,char*argv[]) noexcept{
         sorted_ranges.push_back(IndexPair(start,end));
         start = end;
     }
-
+    std::cout<< "read - start sort " << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now()-start_time) << std::endl;
     #pragma omp parallel for shared(pos_key_data) schedule(static)
     for(int i=0;i<threads_num;i++){
         const int start=sorted_ranges[i].first;
@@ -65,7 +65,7 @@ int main(int argc,char*argv[]) noexcept{
 
     // estimating  the ranks using ms_select
     std::vector<uint64_t> pivots(threads_num-1);
-    
+    std::cout<< "end sort - start pivots " << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now()-start_time) << std::endl;
     #pragma omp parallel for shared(pivots) shared(sorted_ranges) schedule(static)
     for(int i=1;i<=pivots.size();i++){
         size_t rank=i*(pos_key_data.size()/threads_num);
@@ -99,6 +99,7 @@ int main(int argc,char*argv[]) noexcept{
     std::vector<size_t> bytes_nums(threads_num);
     const unsigned long payload_header_size=sizeof(uint64_t)+sizeof(uint64_t);
     std::vector<PosKeyPair> final_result(pos_key_data.size());
+    std::cout<< "end pivots start write" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now()-start_time) << std::endl;
     #pragma omp parallel for shared(pos_key_data,final_result) shared(bucket_subranges) schedule(static)
     for(int i=0;i<threads_num;i++){
             k_way_merge_buffer(pos_key_data.data(),bucket_subranges[i],final_result.data()+merge_offsets[i],total_sizes[i]);
@@ -123,10 +124,10 @@ int main(int argc,char*argv[]) noexcept{
         byte_offset+=bytes_nums[i];
     }
     const size_t payload_thread_max=memory_limit/threads_num;
-    
+    std::cout<< "last stage " <<std::chrono::high_resolution_clock::now() << std::endl;
     #pragma omp parallel for schedule(static)
     for (int i = 0; i < threads_num; ++i) {
-        buffered_poskey_write(
+        buffered_poskey_write_pread(
             in_filename,out_filename,
             offsets[i],final_result.data()+merge_offsets[i],
             total_sizes[i],payload_max,payload_thread_max
