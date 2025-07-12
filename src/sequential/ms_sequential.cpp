@@ -34,7 +34,7 @@ int main(int argc,char*argv[]){
     std::cout<<"starting from " << in_filename << " to "<< out_filename << " with a limit of "<< memory_limit/(1024UL*1024L*1024L)<< "GBs" <<std::endl;
     auto start_time = std::chrono::high_resolution_clock::now();
     
-    std::vector<PosKeyPair> pos_key_data=read_records_pread(in_filename,memory_limit);
+    std::vector<PosKeyPair> pos_key_data=std::move(read_records_pread(in_filename,memory_limit));
     if (verbose){
         unsigned int i=0;
         for(const auto& pkp:pos_key_data){
@@ -45,6 +45,13 @@ int main(int argc,char*argv[]){
         pos_key_data.begin(),pos_key_data.end(),
         [](const PosKeyPair& a,const PosKeyPair& b){return a.key<b.key;}
     );
+    std::ifstream in_file(in_filename,std::ifstream::binary | std::ifstream::ate);
+    size_t new_file_size= in_file.tellg();
+    in_file.close();
+    std::ofstream out_file(out_filename,std::ofstream::binary);
+    out_file.seekp(new_file_size-1);
+    out_file.put(0);
+    out_file.close();
     buffered_poskey_write_pread(in_filename,out_filename,0,pos_key_data.data(),pos_key_data.size(),payload_max,memory_limit);
     
     if (verbose){
