@@ -1,9 +1,8 @@
 #!/bin/bash
 
 trials=5
-# 128b 1Gb 2Gb
-n_records=($((1*512*1024))      $((2*2*5*6*1024)) )
-max_payloads=($((2*2*6*5*1024))    $((1*512*1024)))
+n_records=($((1024*1024*2)) $((45*1024*2)))
+max_payloads=($((45*1024))  $((1024*1024)))
 
 make cleanall
 make payload_generator
@@ -39,7 +38,7 @@ for i in $(seq 1 $trials); do
         make cleanall
         make RPAYLOAD_MAX=$mp ms_sequential
         echo "iteration=$i max_payload=$mp records_number=$nr"
-        output=$(./ms_sequential -i test_files/file_mp${mp}_nr${nr}.pms -o test_files/file_mp${mp}_nr${nr}_out.pms -v 1 )
+        output=$(./ms_sequential -i test_files/file_mp${mp}_nr${nr}.pms -o test_files/file_mp${mp}_nr${nr}_out.pms -v 0 )
         echo "$output"
         time_ms=$(echo "$output" | grep 'time(ms):' | awk -F ':' '{print $2}')
         echo "$i,$mp,$nr,$time_ms" >> "$output_file"

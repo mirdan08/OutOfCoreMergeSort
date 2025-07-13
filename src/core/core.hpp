@@ -17,7 +17,7 @@
 const unsigned long payload_max= RPAYLOAD_MAX;
 
 //default max memory limit for single node
-const unsigned long MAX_MEMORY_LIMIT=32UL*1024UL*1024UL*1024UL;
+const unsigned long MAX_MEMORY_LIMIT=20UL*1024UL*1024UL*1024UL;
 //a single record struct
 struct Record {
     uint32_t len; 
@@ -68,7 +68,7 @@ std::vector<PosKeyPair> k_way_merge_heap(
     const std::vector<IndexPair>& subranges
 ) noexcept ;
 
-void radix_sort_slice(PosKeyVec& data, size_t start, size_t end) noexcept ;
+//void radix_sort_slice(PosKeyVec& data, size_t start, size_t end) noexcept ;
 void buffered_poskey_write(const std::string in_filename,const std::string out_filename,size_t file_offset,PosKeyPair* data,size_t data_count,size_t payload_max,size_t memory_limit);
 void build_pivot_subrange(
     size_t start,size_t end, int j,
@@ -76,3 +76,12 @@ void build_pivot_subrange(
     const std::vector<PosKeyPair>& data,
     std::vector<std::vector<IndexPair>>& bucket_subranges 
 );
+
+void buffered_poskey_write_pread(
+    const std::string& in_filename,
+    const std::string& out_filename,
+    size_t file_offset,
+    PosKeyPair* data,
+    size_t data_count,
+    size_t payload_max,
+    size_t memory_limit);

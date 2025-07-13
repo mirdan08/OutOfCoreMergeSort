@@ -12,6 +12,8 @@
 #include <cstring>
 #include <vector>
 
+#pragma once
+
 std::vector<PosKeyPair> read_records(std::string& file_path,const unsigned long memory_limt);
 
 bool parse_cli_args(int argc,char*argv[],size_t& threads_num,bool& verbose,std::string& in_filename,std::string& out_filename,size_t& memory_limit);

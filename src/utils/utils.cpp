@@ -130,7 +130,6 @@ std::vector<PosKeyPair> read_records_pread(const std::string& file_path, const u
             std::memcpy(&pkp.key, buffer + record_offset, sizeof(uint64_t));
             std::memcpy(&pkp.len, buffer + record_offset + sizeof(uint64_t), sizeof(uint64_t));
             pkp.pos = records_count;
-
             pkp.offset = buffer_start + record_offset;
             record_offset += pkp.len + payload_header_size;
             bytes_read += pkp.len + payload_header_size;

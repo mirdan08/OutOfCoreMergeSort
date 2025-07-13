@@ -364,8 +364,8 @@ void radix_sort_buffer(PosKeyPair* data, size_t n) {
     std::memcpy(A, data, n * sizeof(PosKeyPair));
 
     for (size_t byte = 0; byte < num_bytes; ++byte) {
-        size_t count[radix] = {0};   // Histogram
-        size_t offset[radix];        // Prefix sums
+        size_t count[radix] = {0};
+        size_t offset[radix];
 
         // 1. Histogram the byte values
         for (size_t j = 0; j < n; ++j) {
@@ -384,12 +384,9 @@ void radix_sort_buffer(PosKeyPair* data, size_t n) {
             uint8_t val = (A[j].key >> (byte * 8)) & 0xFF;
             B[offset[val]++] = A[j];
         }
-
         // 4. Swap A and B pointers
         std::swap(A, B);
     }
-
-    // If num_bytes is even, result is in A; else in B
     if (num_bytes % 2 == 0) {
         std::memcpy(data, A, n * sizeof(PosKeyPair));
     } else {
@@ -400,11 +397,11 @@ void radix_sort_buffer(PosKeyPair* data, size_t n) {
     delete[] B;
 }
 
-void radix_sort_slice(PosKeyVec& data, size_t start, size_t end) noexcept {
+/* void radix_sort_slice(PosKeyVec& data, size_t start, size_t end) noexcept {
     PosKeyVec slice(data.begin() + start, data.begin() + end);
     radix_sort_by_key(slice);
     std::copy(slice.begin(), slice.end(), data.begin() + start);
-}
+} */
 
 void build_pivot_subrange(
     size_t start,size_t end, int j,
@@ -414,17 +411,6 @@ void build_pivot_subrange(
 ){
     size_t last_idx =start;
     for (size_t b = 0; b < pivots.size()+1; ++b) {
-        /* auto low = data.begin() + last_idx;
-        
-        auto high = (b < pivots.size())
-        ? 
-        std::upper_bound(low, end_it, pivots[b],
-            [](uint64_t val, const PosKeyPair& elem) {
-                return val < elem.key;
-            })
-            : end_it;
-        bucket_subranges[b][j]=IndexPair(low - data.begin(), high - data.begin()); */
-        //last_idx = high - data.begin();
         auto high= (b < pivots.size()) ? raw_upper_bound(data.data()+last_idx,end-last_idx,pivots[b])+last_idx:end;
         bucket_subranges[b][j]=IndexPair(last_idx,high);
         last_idx = high;
@@ -489,7 +475,7 @@ void buffered_poskey_write_pread(
     size_t payload_max,
     size_t memory_limit)
 {
-    size_t thread_offset = file_offset;  // Output start offset for this thread
+    size_t offset = file_offset;  // Output start offset for this thread
 
     int in_fd = open(in_filename.c_str(), O_RDONLY);
     if (in_fd < 0) {
@@ -517,21 +503,22 @@ void buffered_poskey_write_pread(
             perror("pread");
             break;
         }
-        if ((size_t)read_bytes != to_read) {
+        /* if ((size_t)read_bytes != to_read) {
             fprintf(stderr, "Short read: expected %zu got %zd\n", to_read, read_bytes);
             break;
-        }
+        } */
 
         size_t record_size = sizeof(data[j].key) + sizeof(data[j].len) + to_read;
 
         // If buffer full, write out
         if (out_pos + record_size > memory_limit) {
-            ssize_t written = pwrite(out_fd, out_buf, out_pos, thread_offset);
+            //std::cout<< "writing "<< out_pos << " at "<< offset << std::endl;
+            ssize_t written = pwrite(out_fd, out_buf, out_pos, offset);
             if (written < 0) {
                 perror("pwrite");
                 break;
             }
-            thread_offset += written;
+            offset += written;
             out_pos = 0;
         }
 
@@ -544,9 +531,8 @@ void buffered_poskey_write_pread(
         out_pos += to_read;
     }
 
-    // Write any remaining buffered data
-    if (out_pos > 0) {
-        ssize_t written = pwrite(out_fd, out_buf, out_pos, thread_offset);
+    if (out_pos > 0 ) {
+        ssize_t written = pwrite(out_fd, out_buf, out_pos, offset);
         if (written < 0) {
             perror("pwrite");
         }
