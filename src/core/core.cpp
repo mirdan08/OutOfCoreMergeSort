@@ -512,14 +512,35 @@ void buffered_poskey_write_pread(
 
         // If buffer full, write out
         if (out_pos + record_size > memory_limit) {
-            //std::cout<< "writing "<< out_pos << " at "<< offset << std::endl;
-            ssize_t written = pwrite(out_fd, out_buf, out_pos, offset);
+/*             ssize_t written = pwrite(out_fd, out_buf, out_pos, offset);
             if (written < 0) {
                 perror("pwrite");
                 break;
             }
             offset += written;
-            out_pos = 0;
+            out_pos = 0; */
+            std::cout<<"started at " << offset << std::endl;
+            size_t total_written = 0;
+            while (total_written < out_pos) {
+                ssize_t written = pwrite(out_fd, 
+                                        out_buf + total_written, 
+                                        out_pos - total_written, 
+                                        offset + total_written);
+                if (written < 0) {
+                    if (errno == EINTR) continue; // Interrupted? retry
+                    perror("pwrite");
+                    break; // unrecoverable error
+                }
+                total_written += written;
+            }
+            
+            if (total_written != out_pos) {
+                fprintf(stderr, "Failed to write full buffer. Only wrote %zu/%zu bytes\n",
+                    total_written, out_pos);
+                }
+            offset+=total_written;
+            out_pos=0;
+            std::cout<< "finished at" <<offset << std::endl;
         }
 
         // Copy key, len, and payload into output buffer
@@ -532,11 +553,27 @@ void buffered_poskey_write_pread(
     }
 
     if (out_pos > 0 ) {
-        ssize_t written = pwrite(out_fd, out_buf, out_pos, offset);
+        size_t total_written = 0;
+        while (total_written < out_pos) {
+            ssize_t written = pwrite(out_fd, 
+                                    out_buf + total_written, 
+                                    out_pos - total_written, 
+                                    offset + total_written);
+            if (written < 0) {
+                if (errno == EINTR) continue; // Interrupted? retry
+                perror("pwrite");
+                break; // unrecoverable error
+            }
+            total_written += written;
+        }
+        offset+=total_written;
+        /* ssize_t written = pwrite(out_fd, out_buf, out_pos, offset);
         if (written < 0) {
             perror("pwrite");
-        }
+        } */
     }
+    std::cout<< "offset finished at " <<offset << std::endl;
+
 
     delete[] out_buf;
     delete[] payload_buf;
