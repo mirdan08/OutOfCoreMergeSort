@@ -8,16 +8,21 @@
 #include <cstdlib>
 #include <cstring>
 
+
+
 #pragma once
 
 #ifndef RPAYLOAD_MAX
 #define RPAYLOAD_MAX 100
 #endif
+
+#define _FILE_OFFSET_BITS 64
+
 //max payload size
 const unsigned long payload_max= RPAYLOAD_MAX;
 
 //default max memory limit for single node
-const unsigned long MAX_MEMORY_LIMIT=16UL*1024UL*1024UL*1024UL;
+const unsigned long MAX_MEMORY_LIMIT=8UL*1024UL*1024UL*1024UL;
 //a single record struct
 struct Record {
     uint32_t len; 

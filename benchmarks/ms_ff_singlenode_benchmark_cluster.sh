@@ -42,7 +42,7 @@ for i in $(seq 1 $trials); do
             make cleanall
             make ff_singlenode RPAYLOAD_MAX=$mp
             echo "iteration=$i max_payload=$mp records_number=$nr threads number=$nt"
-            output=$(./ff_singlenode -i test_files/file_mp${mp}_nr${nr}.pms -o test_files/file_mp${mp}_nr${nr}_out.pms -t $nt -v 0 )
+            output=$(srun --time=00:20:00 ./ff_singlenode -i test_files/file_mp${mp}_nr${nr}.pms -o test_files/file_mp${mp}_nr${nr}_out.pms -t $nt -v 0 )
             echo "$output"
             time_ms=$(echo "$output" | grep 'time(ms):' | awk -F ':' '{print $2}')
             echo "$i,$mp,$nr,$time_ms" >> "$output_file"

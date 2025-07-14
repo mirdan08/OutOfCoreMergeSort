@@ -35,7 +35,7 @@ struct SortingCollector: public ff::ff_minode_t<IndexPair,size_t>{
     }
     size_t* svc(IndexPair* in){
         counter++;
-        std::cout<< "collecting " <<counter << std::endl;
+        //std::cout<< "collecting " <<counter << std::endl;
         if(counter>=p){
             for(size_t i=0;i<p;i++){
                 ff_send_out(new size_t(i));
@@ -50,7 +50,7 @@ struct SortingCollector: public ff::ff_minode_t<IndexPair,size_t>{
 struct SortingWorker: public ff::ff_monode_t<IndexPair,IndexPair>{
     SortingWorker(PosKeyVec& data):data(data){};
     IndexPair* svc(IndexPair* in){
-        std::cout<< in->first << " - " <<in->second << std::endl;
+        //std::cout<< in->first << " - " <<in->second << std::endl;
         radix_sort_buffer(data.data()+(in->first),in->second-in->first);
         return in;
     }
@@ -87,15 +87,16 @@ struct SelectCollector : ff::ff_minode_t<uint64_t,std::vector<IndexPair>> {
 
     std::vector<IndexPair>* svc(uint64_t* task) {
         pivots.push_back(*task);
-        //delete task;
-        if (pivots.size() == p - 1) {
+
+        //all pivots a received or you have only one worker
+        if (pivots.size() == p - 1 || p==1) {
             //std::cout<< "pivots are built" << std::endl;
             std::vector<std::vector<IndexPair>> bucket_subranges(p,std::vector<IndexPair>(p));
 
             for (int j=0;j<ranges.size();j++) {
                 const size_t start=ranges[j].first;
                 const size_t end=ranges[j].second;
-                std::cout << start<< " " << end << " " <<std::is_sorted(data.begin()+start,data.begin()+end,[](const auto& a,const auto& b){return a.key<b.key;})<< std::endl;
+                
 
                 build_pivot_subrange(start,end,j,pivots,data,bucket_subranges);
             }
@@ -198,6 +199,7 @@ struct FileWriter: ff::ff_minode_t<
     :out_filename(out_filename),in_filename(in_filename),num_workers(num_workers),memory_limit(memory_limit){};
     int* svc(std::pair<size_t,PosKeyVec*>* in){
         size_t byte_offset=in->first;
+        //std::cout << "writing sorted at"<< byte_offset << " " << in->second->size()<<std::endl;
         buffered_poskey_write_pread(in_filename,out_filename,byte_offset,in->second->data(),in->second->size(),payload_max,memory_limit);
         /* PosKeyVec* merged_result=in->second;
 
@@ -229,8 +231,7 @@ struct SelectEmitter : ff::ff_node_t<size_t,size_t> {
     size_t n, p, current = 1;
     SelectEmitter(size_t n, size_t p) : n(n), p(p) {};
     size_t* svc(size_t* in) {
-        //delete in;
-        if (current > p - 1) return EOS;
+        if (current > p - 1 && p!=1) return EOS;
         size_t* k = new size_t(current * n / p);
         ++current;
         return k;

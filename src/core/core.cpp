@@ -503,23 +503,11 @@ void buffered_poskey_write_pread(
             perror("pread");
             break;
         }
-        /* if ((size_t)read_bytes != to_read) {
-            fprintf(stderr, "Short read: expected %zu got %zd\n", to_read, read_bytes);
-            break;
-        } */
 
         size_t record_size = sizeof(data[j].key) + sizeof(data[j].len) + to_read;
 
         // If buffer full, write out
         if (out_pos + record_size > memory_limit) {
-/*             ssize_t written = pwrite(out_fd, out_buf, out_pos, offset);
-            if (written < 0) {
-                perror("pwrite");
-                break;
-            }
-            offset += written;
-            out_pos = 0; */
-            std::cout<<"started at " << offset << std::endl;
             size_t total_written = 0;
             while (total_written < out_pos) {
                 ssize_t written = pwrite(out_fd, 
@@ -540,7 +528,6 @@ void buffered_poskey_write_pread(
                 }
             offset+=total_written;
             out_pos=0;
-            std::cout<< "finished at" <<offset << std::endl;
         }
 
         // Copy key, len, and payload into output buffer
@@ -567,13 +554,7 @@ void buffered_poskey_write_pread(
             total_written += written;
         }
         offset+=total_written;
-        /* ssize_t written = pwrite(out_fd, out_buf, out_pos, offset);
-        if (written < 0) {
-            perror("pwrite");
-        } */
     }
-    std::cout<< "offset finished at " <<offset << std::endl;
-
 
     delete[] out_buf;
     delete[] payload_buf;
