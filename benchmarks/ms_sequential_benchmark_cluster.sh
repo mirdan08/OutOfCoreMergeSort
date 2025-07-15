@@ -1,8 +1,8 @@
 #!/bin/bash
 trials=5
 # 128b 1Gb 2Gb
-n_records=($((1024*1024*2)) $((45*1024*2)))
-max_payloads=($((45*1024))  $((1024*1024)))
+n_records=($((1024*1024*2)) $((32*1024*2)))
+max_payloads=($((32*1024))  $((1024*1024)))
 
 make cleanall
 make payload_generator
