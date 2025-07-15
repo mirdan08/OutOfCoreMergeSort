@@ -10,7 +10,7 @@ num_threads=(1 2 4 8 16 32)
 make cleanall
 make payload_generator
 
-if ! [ -f "test_files" ]; then
+if ! [ -f "test_files" ]; then 
     mkdir -p test_files
 fi
 

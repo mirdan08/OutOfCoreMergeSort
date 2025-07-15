@@ -56,7 +56,7 @@ int main(int argc,char*argv[]) noexcept{
     MPI_Init_thread( &argc , &argv , MPI_THREAD_MULTIPLE, &provided);
 
     int rank, nprocs;
-    std::vector<PosKeyPair> pos_key_data= std::move(read_records(in_filename,memory_limit));
+    std::vector<PosKeyPair> pos_key_data= std::move(read_records_pread(in_filename,memory_limit));
 
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
@@ -107,7 +107,6 @@ int main(int argc,char*argv[]) noexcept{
     for(int i=0;i<threads_num;i++){
         const int start=sorted_ranges[i].first;
         const int end=sorted_ranges[i].second;
-        //radix_sort_slice(local_data,start,end);
         radix_sort_buffer(local_data.data()+start,end-start);
     }
 
@@ -362,10 +361,11 @@ int main(int argc,char*argv[]) noexcept{
 
     #pragma omp parallel for schedule(static)
     for (int i = 0; i < threads_num; ++i) {
-        buffered_poskey_write(in_filename,out_filename,offsets[i],rank_final_result.data()+rank_merge_offsets[i],rank_total_sizes[i],payload_max,payload_thread_max);
+        buffered_poskey_write_pread(in_filename,out_filename,offsets[i],rank_final_result.data()+rank_merge_offsets[i],rank_total_sizes[i],payload_max,payload_thread_max);
     }
 
     MPI_Type_free(&pkp_type);
+    MPI_Barrier( MPI_COMM_WORLD);
     MPI_Finalize();
     if(rank==0){
         auto end_time = std::chrono::high_resolution_clock::now();

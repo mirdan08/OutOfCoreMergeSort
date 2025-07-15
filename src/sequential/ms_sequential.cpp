@@ -52,7 +52,12 @@ int main(int argc,char*argv[]){
     out_file.seekp(new_file_size-1);
     out_file.put(0);
     out_file.close();
-    buffered_poskey_write_pread(in_filename,out_filename,0,pos_key_data.data(),pos_key_data.size(),payload_max,memory_limit);
+
+    buffered_poskey_write_pread(
+        in_filename,out_filename,
+        0,pos_key_data.data(),pos_key_data.size(),
+        payload_max,memory_limit
+    );
     
     if (verbose){
         std::cout<< "done writing" << std::endl;
