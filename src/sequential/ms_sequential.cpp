@@ -24,6 +24,101 @@ struct HeapNode {
     }
 };
 
+class BufferedRecordWriter{
+    size_t bufferOffset=0;
+    size_t fileOffset;
+    size_t maxBufferSize;
+    size_t bufferSize;
+    char* buffer;
+    int outFd=-1;
+
+    public:
+        BufferedRecordWriter(std::string filePath,size_t fileOffset,size_t maxBufferSize)
+            :fileOffset(fileOffset),
+             maxBufferSize(maxBufferSize)
+        {
+            buffer=(char*)malloc(maxBufferSize);
+            bufferSize=maxBufferSize;
+            setFile(filePath,fileOffset);
+        }
+
+        ~BufferedRecordWriter(){
+          if(buffer==nullptr) delete buffer;
+          if(outFd>0) close(outFd);
+        }
+
+        ssize_t addRecords(const Record* records,const size_t recordsNum){
+            ssize_t written=0;
+            for(size_t i=0;i<recordsNum;++i){
+                written+=addRecord(records[i]);
+            }
+            return written;
+        }
+
+        ssize_t addRecord(const Record& record){
+
+            if(Record::recordBytesSize(record)+bufferOffset>=bufferSize) flushBuffer();
+
+            std::memcpy(buffer+bufferOffset,&record.key,sizeof(Record::key));
+            std::memcpy(buffer+bufferOffset+sizeof(Record::key),&record.len,sizeof(Record::len));
+            std::memcpy(buffer+bufferOffset+Record::headerBytesSize(),&record.payload,record.len);
+            bufferOffset+=Record::recordBytesSize(record);
+            return bufferOffset;
+        }
+        bool setFile(std::string filePath,size_t fileOffset){
+            //close if it was open
+            if(outFd>0) {
+                flushBuffer();
+                close(outFd);
+            }
+            
+            outFd = open(filePath.c_str(), O_WRONLY);
+            if (outFd < 0) {
+                perror("open output file");
+                close(outFd);
+                return false;
+            }
+            bufferOffset=0;
+            fileOffset=fileOffset;
+            return true;
+        }
+
+        ssize_t flushBuffer(){
+            ssize_t totalWritten = 0;
+            while (totalWritten < bufferOffset) {
+                ssize_t written = pwrite(outFd, 
+                                        buffer , 
+                                        bufferOffset - totalWritten, 
+                                        fileOffset + totalWritten);
+                if (written < 0) {
+                    if (errno == EINTR) continue; // Interrupted? retry
+                    perror("pwrite");
+                    return -1;
+                }
+                totalWritten += written;
+            }
+            fileOffset+=totalWritten;
+            bufferOffset=0;
+            return totalWritten;
+        }
+
+        ssize_t setBufferSize(size_t size){
+            //cannot use more memory than max
+            if(size>maxBufferSize) return -1;
+            bufferSize=size;
+            return bufferSize;
+        }
+
+        void clear(){
+            if(outFd>0){
+                close(outFd);
+            }
+            delete buffer;
+
+        }
+
+};
+
 int main(int argc,char*argv[]){
     uint64_t records_num=0;
     size_t threads_num=0;
@@ -68,15 +163,20 @@ int main(int argc,char*argv[]){
     std::vector<size_t> bytesOffsets;
     std::vector<size_t> sizes;
 
+    BufferedRecordWriter bufWriter("tmp_"+out_filename,0,memory_limit);
+
     while(currentOffset<fileSize){
         const auto [bytesRead,recordData]=readRecords(in_filename,memory_limit,currentOffset);
         std::sort(recordData->begin(),recordData->end());
-        writeRecords("tmp_"+out_filename,currentOffset,recordData->data(),recordData->size(),payload_max,memory_limit);
+        bufWriter.addRecords(recordData->data(),recordData->size());
+        //writeRecords("tmp_"+out_filename,currentOffset,recordData->data(),recordData->size(),payload_max,memory_limit);
         bytesOffsets.push_back(currentOffset);
         sizes.push_back(recordData->size());
         currentOffset+=bytesRead;
         delete recordData;
     }
+    bufWriter.flushBuffer();
+    bufWriter.clear();
 
     size_t nWays=bytesOffsets.size();
     std::vector<RecordVec*> ways(nWays);
@@ -94,14 +194,15 @@ int main(int argc,char*argv[]){
     size_t outBufferOffset=0;
     std::vector<Record> outputBuffer;
 
-    std::cout << "file size " <<fileSize << std::endl;
+    BufferedRecordWriter outBufWriter(out_filename,0,memory_limit/(nWays+1));
 
     while (minPriorityQueue.size()!=0){
         auto [key,pos,way]=minPriorityQueue.top();
         minPriorityQueue.pop();
         const auto& currentRecord=ways[way]->at(pos);
         outBufferBytes+= Record::recordBytesSize(currentRecord);
-        outputBuffer.push_back(std::move(currentRecord));
+        outBufWriter.addRecord(currentRecord);
+        //outputBuffer.push_back(std::move(currentRecord));
         recordCounter[way]++;
         // this way has exhausted records, load new values if present
         if(pos==ways[way]->size()-1 && recordCounter[way]<sizes[way]){
@@ -115,25 +216,17 @@ int main(int argc,char*argv[]){
         else if(recordCounter[way]<sizes[way]){
             minPriorityQueue.push({ways[way]->at(pos+1).key,pos+1,way});
         }
-        //buffer is full flush it
-        if(outBufferBytes>=memory_limit/(nWays+1)){
-            std::cout<< "writing from " <<outBufferOffset << std::endl;
-            writeRecords(out_filename,outBufferOffset,outputBuffer.data(),outputBuffer.size(),payload_max,memory_limit/(nWays+1));
-            outputBuffer.clear();
-            outBufferOffset+=outBufferBytes;
-            outBufferBytes=0;
-        }
     }
-
-
+    outBufWriter.flushBuffer();
+    outBufWriter.clear();
     
     outputBuffer.clear();
 
     std::filesystem::remove("tmp_"+out_filename);
-
     for(int i=0;i<nWays;i++){
         if(ways[i]!=nullptr) delete ways[i];
     }
+
     auto end_time = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
     std::cout<< "time(ms):" << duration.count() << std::endl;
