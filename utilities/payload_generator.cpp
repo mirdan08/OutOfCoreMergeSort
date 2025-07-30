@@ -7,10 +7,53 @@
 #include <chrono>
 #include <getopt.h>
 #include <utils/utils.hpp>
+#include <core/core.hpp>
 struct RecordHeader {
     uint32_t len;
     uint64_t key;
 };
+
+bool printRecordHeaders(const std::string& filename) {
+    std::ifstream file(filename, std::ios::binary);
+    if (!file) {
+        std::cerr << "Error opening file: " << filename << "\n";
+        return false;
+    }
+    uint64_t pastKey=0;
+    bool isSorted=true;
+    while (true) {
+        uint32_t len;
+        uint64_t key;
+
+        // Read len and key (the header)
+        file.read(reinterpret_cast<char*>(&key), sizeof(key));
+        file.read(reinterpret_cast<char*>(&len), sizeof(len));
+        if(key<pastKey){
+            isSorted=false;
+        }
+        pastKey=key;
+
+        if (file.gcount() == 0) break; // End of file
+
+        if (!file) {
+            std::cerr << "Incomplete record header or error reading file.\n";
+            break;
+        }
+
+        std::cout << "len: " << len << ", key: " << key << "\n";
+
+        // Skip the payload
+        file.seekg(len, std::ios::cur);
+        if (!file) {
+            std::cerr << "Error skipping payload.\n";
+            break;
+        }
+    }
+
+    file.close();
+
+    return isSorted;
+}
 
 int main(int argc,char*argv[]) {
     int opt;
@@ -20,6 +63,8 @@ int main(int argc,char*argv[]) {
     bool verbose;
     bool debug=false;
     size_t memory_limit=3359738368;
+
+    std::string debugFilename="";
     while ((opt = getopt(argc, argv, "v:o:p:r:d:")) != -1) {
         switch (opt) {
             case 'p': {
@@ -40,8 +85,9 @@ int main(int argc,char*argv[]) {
                 break;
             }
             case 'd':{
-                int d = std::stoi(optarg);
-                debug= (d>0?true:false);
+                debug=true;
+                debugFilename=optarg;
+                break;
             }
             default:{
                 std::cout << "wrong arguments" << std::endl;
@@ -49,48 +95,33 @@ int main(int argc,char*argv[]) {
         }
     }
     std::ofstream out_file(out_path, std::ios::binary);
-    if(out_path == ""){
+    if(out_path == "" && debugFilename==""){
         std::cerr << "No output file was specified\n";
         return 1;
     }
-    if (!out_file) {
+    if (!out_file && debugFilename=="") {
         std::cerr << "Failed to open output file.\n";
         return 1;
     }
-    if(payload_max <=0){
+    if(payload_max <=0 && debugFilename=="" ){
         std::cerr << "payload max size must be >0.\n";
         return 1;
     }
-    if(records_count <=0){
+    if(records_count <=0 && debugFilename==""){
         std::cerr << "records count must be >0.\n";
         return 1;
     }
 
-/*     if(debug){
-        const auto recs=read_records(out_path,memory_limit);
-        size_t i=0;
-        for(const auto& pkp:recs){
-            std::cout<< i << " " << pkp.key << "-" << pkp.len << std::endl;
-        }
-        std::cout<< "sorted "<< std::is_sorted(recs.begin(),recs.end(),[](const auto& a,const auto& b){return a.key<b.key;}) << std::endl;
-    } */
+    if(debug){
+        std::cout<<  (printRecordHeaders(debugFilename)? "is sorted":"is not sorted")<< std::endl;
+        return 0;
+    }
 
     std::cout << "beggining to write '" << out_path << "' with " << records_count << " records and max payload "<< payload_max <<"."<< std::endl;
-    // Write PAYLOAD_MAX
-    //out_file.write(reinterpret_cast<const char*>(&payload_max), sizeof(uint64_t));
-
-    // Write placeholder for RECORD_COUNT (we’ll fill real value after generation)
-    //out_file.write(reinterpret_cast<const char*>(&records_count), sizeof(uint64_t));
-
-    // Placeholder for offsets
-    //const size_t offset_table_pos = out_file.tellp();
-    //std::vector<uint64_t> offsets(records_count, 0);
-    //out_file.seekp(sizeof(uint64_t) * records_count, std::ios::cur);
-
     // Record generation
     std::mt19937_64 rng(std::chrono::steady_clock::now().time_since_epoch().count());
     std::uniform_int_distribution<uint64_t> key_dist(0, UINT64_MAX);
-    std::uniform_int_distribution<uint64_t> len_dist(8, payload_max);
+    std::uniform_int_distribution<uint32_t> len_dist(8, payload_max);
     std::uniform_int_distribution<uint8_t> byte_dist(0, 255);
 
     //std::vector<uint64_t> actual_offsets;
@@ -105,7 +136,7 @@ int main(int argc,char*argv[]) {
 
         // Write RecordHeader
         out_file.write(reinterpret_cast<const char*>(&key), sizeof(uint64_t));
-        out_file.write(reinterpret_cast<const char*>(&len), sizeof(uint64_t));
+        out_file.write(reinterpret_cast<const char*>(&len), sizeof(uint32_t));
         if(verbose){
             std::cout<< i << ">" << len << ":" << key << std::endl;
         }
