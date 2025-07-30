@@ -561,3 +561,99 @@ void buffered_poskey_write_pread(
     close(in_fd);
     close(out_fd);
 }
+
+
+
+std::pair<size_t,RecordVec*> bufferedRecordRead(
+    const std::string& in_filename,
+    const std::string& out_filename,
+    size_t file_offset,
+    PosKeyPair* data,
+    size_t data_count,
+    size_t payload_max,
+    size_t memory_limit)
+{
+    size_t offset = file_offset;  // Output start offset for this thread
+
+    int in_fd = open(in_filename.c_str(), O_RDONLY);
+    if (in_fd < 0) {
+        perror("open input file");
+    }
+
+    int out_fd = open(out_filename.c_str(), O_RDWR);
+    if (out_fd < 0) {
+        perror("open output file");
+        close(in_fd);
+    }
+
+    char* payload_buf = new char[payload_max];
+    char* out_buf = new char[memory_limit];
+    size_t out_pos = 0;
+
+    for (size_t j = 0; j < data_count; ++j) {
+        size_t to_read = data[j].len;
+
+        // Read payload directly at offset using pread()
+        ssize_t read_bytes = pread(in_fd, payload_buf, to_read, data[j].offset + sizeof(uint64_t) * 2);
+        if (read_bytes < 0) {
+            perror("pread");
+            break;
+        }
+
+        size_t record_size = sizeof(data[j].key) + sizeof(data[j].len) + to_read;
+
+        // If buffer full, write out
+        if (out_pos + record_size > memory_limit) {
+            size_t total_written = 0;
+            while (total_written < out_pos) {
+                ssize_t written = pwrite(out_fd, 
+                                        out_buf + total_written, 
+                                        out_pos - total_written, 
+                                        offset + total_written);
+                if (written < 0) {
+                    if (errno == EINTR) continue; // Interrupted? retry
+                    perror("pwrite");
+                    break; // unrecoverable error
+                }
+                total_written += written;
+            }
+            
+            if (total_written != out_pos) {
+                fprintf(stderr, "Failed to write full buffer. Only wrote %zu/%zu bytes\n",
+                    total_written, out_pos);
+                }
+            offset+=total_written;
+            out_pos=0;
+        }
+
+        // Copy key, len, and payload into output buffer
+        std::memcpy(out_buf + out_pos, &data[j].key, sizeof(data[j].key));
+        out_pos += sizeof(data[j].key);
+        std::memcpy(out_buf + out_pos, &data[j].len, sizeof(data[j].len));
+        out_pos += sizeof(data[j].len);
+        std::memcpy(out_buf + out_pos, payload_buf, to_read);
+        out_pos += to_read;
+    }
+
+    if (out_pos > 0 ) {
+        size_t total_written = 0;
+        while (total_written < out_pos) {
+            ssize_t written = pwrite(out_fd, 
+                                    out_buf + total_written, 
+                                    out_pos - total_written, 
+                                    offset + total_written);
+            if (written < 0) {
+                if (errno == EINTR) continue; // Interrupted? retry
+                perror("pwrite");
+                break; // unrecoverable error
+            }
+            total_written += written;
+        }
+        offset+=total_written;
+    }
+
+    delete[] out_buf;
+    delete[] payload_buf;
+    close(in_fd);
+    close(out_fd);
+}

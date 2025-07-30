@@ -27,3 +27,13 @@ void read_payloads_chunk(
     std::vector<PosKeyPair>& pos_key_data
 );
 std::vector<PosKeyPair> read_records_pread(const std::string& file_path, const unsigned long memory_limit);
+
+std::pair<size_t,RecordVec*> readRecords(const std::string& file_path, const unsigned long memory_limit,size_t offset);
+
+void writeRecords(
+    const std::string& out_filename,
+    size_t file_offset,
+    Record* data,
+    size_t data_count,
+    size_t payload_max,
+    size_t memory_limit);

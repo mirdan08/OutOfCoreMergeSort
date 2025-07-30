@@ -1,5 +1,5 @@
 #include <cstdint>
-#include<fstream>
+#include <fstream>
 #include <vector>
 #include <algorithm>
 #include <fstream>
@@ -7,8 +7,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-
-
 
 #pragma once
 
@@ -22,12 +20,21 @@
 const unsigned long payload_max= RPAYLOAD_MAX;
 
 //default max memory limit for single node
-const unsigned long MAX_MEMORY_LIMIT=8UL*1024UL*1024UL*1024UL;
+const unsigned long MAX_MEMORY_LIMIT=1UL*1024UL*1024UL*1024UL;
 //a single record struct
 struct Record {
     uint32_t len; 
     uint64_t key; 
     char payload[payload_max];
+    bool inline operator<(const auto& other){
+        return key<other.key;
+    }
+    static size_t headerBytesSize(){
+        return sizeof(Record::len)+sizeof(Record::key);
+    }
+    static size_t recordBytesSize(const Record& instance){
+        return headerBytesSize()+instance.len;
+    }
 };
 
 struct MemoryRecord{
@@ -48,6 +55,8 @@ void write_record(Record& record,std::ofstream& out_file);
 
 
 using PosKeyVec=std::vector<PosKeyPair>;
+
+using RecordVec=std::vector<Record>;
 
 using IndexPair=std::pair<unsigned long,unsigned long>;
 using SortResult=std::tuple<unsigned long,unsigned long,unsigned long>;
@@ -90,3 +99,13 @@ void buffered_poskey_write_pread(
     size_t data_count,
     size_t payload_max,
     size_t memory_limit);
+
+std::pair<size_t,RecordVec*> bufferedRecordRead(
+    const std::string& in_filename,
+    const std::string& out_filename,
+    size_t file_offset,
+    PosKeyPair* data,
+    size_t data_count,
+    size_t payload_max,
+    size_t memory_limit);
+    
