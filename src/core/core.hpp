@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <iostream>
+#include <omp.h>
 
 #pragma once
 
@@ -25,7 +27,7 @@ const unsigned long MAX_MEMORY_LIMIT=1UL*1024UL*1024UL*1024UL;
 struct Record {
     uint32_t len; 
     uint64_t key; 
-    char payload[payload_max];
+    char* payload;
     bool inline operator<(const auto& other){
         return key<other.key;
     }
@@ -108,4 +110,249 @@ std::pair<size_t,RecordVec*> bufferedRecordRead(
     size_t data_count,
     size_t payload_max,
     size_t memory_limit);
+
+
+struct HeapNodeRecord {
+    uint64_t key;          // Key for sorting
+    uint32_t len;            // Position in data of this element
+    char* payload;
+    size_t way;
+    // This operator makes the priority_queue a min-heap by key
+    bool inline operator>(const HeapNodeRecord& other) const {
+        return key > other.key;
+    }
+};
+
+class BufferedRecordWriter{
+    size_t bufferOffset=0;
+    size_t fileOffset;
+    size_t maxBufferSize;
+    size_t bufferSize;
+    char* buffer;
+    int outFd=-1;
+    size_t fileSize;
+
+    public:
+        BufferedRecordWriter(int fd,size_t fileOffset,size_t maxBufferSize)
+            :fileOffset(fileOffset),
+                maxBufferSize(maxBufferSize)
+        {
+            buffer= new char[maxBufferSize];
+            bufferSize=maxBufferSize;
+            setFile(fd,fileOffset);
+        }
+
+        inline ssize_t addRecords(Record* records,const size_t recordsNum){
+            ssize_t written=0;
+            for(size_t i=0;i<recordsNum;++i){
+                written+=addRecord(records[i]);
+            }
+            return written;
+        }
+
+        inline ssize_t addRecord(const Record& record){
+            if(Record::recordBytesSize(record)+bufferOffset>=bufferSize) flushBuffer();
+            std::memcpy(buffer+bufferOffset,&record.key,sizeof(Record::key));
+            std::memcpy(buffer+bufferOffset+sizeof(Record::key),&record.len,sizeof(Record::len));
+            std::memcpy(buffer+bufferOffset+Record::headerBytesSize(),record.payload,record.len);
+            
+            bufferOffset+=Record::recordBytesSize(record);
+            return Record::recordBytesSize(record);
+        }
+        inline size_t getFileOffset(){
+            return fileOffset;
+        }
+        bool setFile(int fd,size_t fileOffset){
+            
+            outFd = fd;
+            if (outFd < 0) {
+                perror("open output file");
+                close(outFd);
+                return false;
+            }
+            bufferOffset=0;
+            fileOffset=fileOffset;
+
+
+
+
+            return true;
+        }
+        
+        inline ssize_t flushBuffer(){
+            ssize_t totalWritten = 0;
+            while (totalWritten < bufferOffset) {
+                ssize_t written = pwrite(outFd, 
+                    buffer + totalWritten, 
+                    bufferOffset - totalWritten, 
+                    fileOffset + totalWritten);
+                if (written < 0) {
+                    if (errno == EINTR) continue; // Interrupted? retry
+                    perror("pwrite");
+                    return -1;
+                }
+                if(written==0) break;
+                totalWritten += written;
+            }
+            
+            std::cout << "offset before" << fileOffset;
+            fileOffset+=totalWritten;
+            std::cout << "offset later" << fileOffset << std::endl;
+            bufferOffset=0;
+            return totalWritten;
+        }
+
+        ssize_t setBufferSize(size_t size){
+            //cannot use more memory than max
+            if(size>maxBufferSize) return -1;
+            bufferSize=size;
+            return bufferSize;
+        }
+
+        void clear(){
+            if (buffer != nullptr){
+                delete[] buffer;
+                buffer = nullptr;
+            }
+        
+        }
+
+};
+
+class BufferedRecordReader{
+    uint64_t bufferOffset=0;
+    uint64_t fileOffset;
+    uint64_t maxBufferSize;
+    char* buffer;
+    int inFd=-1;
+
+    size_t lastRecordPos=0;
     
+
+    public:
+        BufferedRecordReader(int fd,size_t fileOffset,size_t maxBufferSize)
+            :fileOffset(fileOffset),
+            maxBufferSize(maxBufferSize)
+        {
+            buffer=new char[maxBufferSize];
+            maxBufferSize=maxBufferSize;
+            setFile(fd,fileOffset);
+        }
+
+        inline std::pair<size_t,std::vector<Record>>getRecords(uint64_t limit){
+            uint64_t bufferSize=std::min(maxBufferSize,limit-fileOffset);
+            uint64_t totalRead=0;
+            const uint64_t chunkSize=64UL*1024UL*1024UL;
+
+            while(totalRead<bufferSize){
+                uint64_t toRead=std::min(limit-(fileOffset+totalRead),chunkSize);
+                if(toRead==0) break;
+
+                ssize_t nRead = pread(inFd, buffer+totalRead,toRead, fileOffset+totalRead);
+                if (nRead < 0) {
+                    perror("pread");
+                    delete[] buffer;
+                    close(inFd);
+                    throw std::runtime_error("Failed during pread");
+                }
+                if(nRead==0) {
+                    break;
+                }
+
+                totalRead+=(uint64_t)nRead;
+            }
+            
+            std::vector<Record> result;
+            bufferOffset=0;
+            
+            while(bufferOffset<bufferSize){
+                //std::cout << bufferOffset << "/"<< bufferSize << std::endl;
+                uint32_t len;
+                uint64_t key;
+                char* payload;
+                //stop reading if the header is at the limit of the buffer
+                if(bufferOffset+Record::headerBytesSize()>=bufferSize){ 
+                    break;
+                }
+                std::memcpy(&key,buffer+bufferOffset,sizeof(Record::key));
+                std::memcpy(&len,buffer+bufferOffset+sizeof(Record::key),sizeof(Record::len));
+                //stop reading if the len is over the limit of the buffer
+                if(bufferOffset+sizeof(Record::key)+sizeof(Record::len)+len>bufferSize){
+                    break;
+                }
+                //don't allocate new memory, use the buffer instead
+                payload=buffer+bufferOffset+Record::headerBytesSize();
+
+                bufferOffset+=sizeof(Record::key)+sizeof(Record::len)+len;
+                //if everything goes well add it to the result to return
+                Record record;
+                record.key=key;
+                record.len=len;
+                record.payload=payload;
+                result.push_back(record);
+            }
+            fileOffset+=bufferOffset;
+
+            return std::pair(fileOffset,std::move(result));
+        }
+        /*
+        Replaces the buffer and returns the old one
+        */
+        inline char* extractBuffer(){
+            char *oldBuffer=buffer;
+            buffer=new char[maxBufferSize];
+            return oldBuffer;
+        }
+
+        bool setFile(int fd,size_t fileOffset){
+            inFd =fd;
+            if (inFd < 0) {
+                perror("open output file");
+                return false;
+            }
+            bufferOffset=0;
+            fileOffset=fileOffset;
+            return true;
+        }
+
+        ssize_t setBufferSize(size_t size){
+            //cannot use more memory than max
+            if(size>maxBufferSize) return -1;
+            maxBufferSize=size;
+            return maxBufferSize;
+        }
+
+        void clear(){
+            if(buffer !=nullptr){
+                delete[] buffer;
+                buffer = nullptr;
+            }
+        }
+};
+
+class BufferedRunConsumer{
+    BufferedRecordReader reader;
+    std::vector<Record> records;
+    size_t currentPos=0;
+    size_t runLimit;
+    size_t currOffset;
+    public:
+        BufferedRunConsumer(int fd,size_t fileOffset,size_t maxBufferSize,size_t runLimit)
+            :reader(fd,fileOffset,maxBufferSize)
+            ,runLimit(runLimit){
+
+            }
+        inline Record getRecord(){
+            if(currentPos==records.size()){
+                const auto [newOffset,newRecords]=reader.getRecords(runLimit);
+                records=newRecords;
+                currOffset=newOffset;
+                currentPos=0;
+            }
+            return records[currentPos++];
+        }
+
+        void clear(){
+            reader.clear();
+        }
+};

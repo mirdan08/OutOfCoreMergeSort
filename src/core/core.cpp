@@ -562,8 +562,6 @@ void buffered_poskey_write_pread(
     close(out_fd);
 }
 
-
-
 std::pair<size_t,RecordVec*> bufferedRecordRead(
     const std::string& in_filename,
     const std::string& out_filename,
