@@ -81,7 +81,7 @@ int main(int argc,char*argv[]){
     while(currentOffset<fileSize){
         auto [newOffset,recordData]=bufReader.getRecords(fileSize);
         std::sort(recordData.begin(),recordData.end());
-        ssize_t bytes= bufWriter.addRecords(recordData.data(),recordData.size());
+        ssize_t bytes= bufWriter.addRecords(recordData.data(),recordData.size(),true);
         bytesOffsets.push_back(bufWriter.getFileOffset());
         sizes.push_back(recordData.size());
         currentOffset=newOffset;
@@ -97,7 +97,7 @@ int main(int argc,char*argv[]){
     }
     readers.emplace_back(tmpFd,bytesOffsets[nWays-1],memory_limit/(nWays+1),fileSize);
 
-    
+
     std::priority_queue<HeapNodeRecord, std::vector<HeapNodeRecord>, std::greater<HeapNodeRecord>> minPriorityQueue;
     std::vector<size_t> recordCounter(nWays,1);
     size_t outBufferBytes=0;
@@ -118,8 +118,7 @@ int main(int argc,char*argv[]){
         r.key=key;
         r.len=len;
         r.payload=payload;
-        std::cout<< i++ << " " <<key << " "<< len << std::endl;
-        outBufWriter.addRecord(r);
+        outBufWriter.addRecord(r,true);
         recordCounter[way]++;
         if(recordCounter[way]<sizes[way]){
             const auto& newRecord=readers[way].getRecord();
@@ -129,7 +128,6 @@ int main(int argc,char*argv[]){
     }
     
     outBufWriter.flushBuffer();
-    std::cout<< "out file offset " <<outBufWriter.getFileOffset() << std::endl;
     
     //outBufWriter.clear();
     for(size_t i=0;i<nWays;i++){

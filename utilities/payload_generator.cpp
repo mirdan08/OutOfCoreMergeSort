@@ -13,7 +13,7 @@ struct RecordHeader {
     uint64_t key;
 };
 
-bool printRecordHeaders(const std::string& filename) {
+bool printRecordHeaders(const std::string& filename,bool verbose) {
     std::ifstream file(filename, std::ios::binary);
     if (!file) {
         std::cerr << "Error opening file: " << filename << "\n";
@@ -21,6 +21,7 @@ bool printRecordHeaders(const std::string& filename) {
     }
     uint64_t pastKey=0;
     bool isSorted=true;
+    size_t i=0;
     while (true) {
         uint32_t len;
         uint64_t key;
@@ -40,7 +41,9 @@ bool printRecordHeaders(const std::string& filename) {
             break;
         }
 
-        std::cout << "len: " << len << ", key: " << key << "\n";
+        if(verbose) {
+            std::cout <<i++ <<" \tlen: " << len << ", \tkey: " << key << "\n";
+        }
 
         // Skip the payload
         file.seekg(len, std::ios::cur);
@@ -113,7 +116,7 @@ int main(int argc,char*argv[]) {
     }
 
     if(debug){
-        std::cout<<  (printRecordHeaders(debugFilename)? "is sorted":"is not sorted")<< std::endl;
+        std::cout<<  (printRecordHeaders(debugFilename,verbose)? "is sorted":"is not sorted")<< std::endl;
         return 0;
     }
 
