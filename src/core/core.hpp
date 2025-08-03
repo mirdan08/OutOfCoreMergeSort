@@ -379,7 +379,6 @@ class BufferedRunConsumer{
 
             }
         inline Record getRecord(){
-            std::cout<< currentPos << " " <<records.size() << std::endl;
             if(currentPos==records.size()){
                 const auto [newOffset,newRecords]=reader.getRecords(runLimit);
                 records=newRecords;
