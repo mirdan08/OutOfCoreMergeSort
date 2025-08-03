@@ -78,7 +78,7 @@ int main(int argc,char*argv[]) noexcept{
             std::vector<size_t> sizes;
         
             BufferedRecordWriter bufWriter(tmpFd,0,(memory_limit/2));
-            BufferedRecordReader bufReader(inFd,0,(memory_limit/2)/threads_num);
+            BufferedRecordReader bufReader(inFd,0,std::max((memory_limit/2)/threads_num,32UL*1024UL*1024UL ));
         
             std::vector<BufferedRecordReader> bufReaders;
             std::vector<char*> buffers;
@@ -98,10 +98,10 @@ int main(int argc,char*argv[]) noexcept{
                     std::sort(recordData.begin(),recordData.end());
                     #pragma omp critical
                     {
-                        bufWriter.addRecords(recordData.data(),recordData.size());
+                        bufWriter.addRecords(recordData.data(),recordData.size(),true);
                         bytesOffsets.push_back(runsOffset);
                         sizes.push_back(recordData.size());
-                        
+                        delete buffer;
                         runsOffset+=batchSize;
                     }
                 }
@@ -112,9 +112,6 @@ int main(int argc,char*argv[]) noexcept{
             bufWriter.flushBuffer();
             bufWriter.clear();
             bufReader.clear();
-            for(const auto& buffer:buffers){
-                delete[] buffer;
-            }
 
             fsync(tmpFd);
             lseek(tmpFd, 0, SEEK_SET);
@@ -128,7 +125,7 @@ int main(int argc,char*argv[]) noexcept{
             readers.emplace_back(tmpFd,bytesOffsets[nWays-1],memory_limit/(nWays+1),fileSize);
             
             std::priority_queue<HeapNodeRecord, std::vector<HeapNodeRecord>, std::greater<HeapNodeRecord>> minPriorityQueue;
-            size_t outBufferBytes=0;
+            size_t outWrittenBytes=0;
             BufferedRecordWriter outBufWriter(outFd,0,memory_limit/(nWays+1));
 
             std::vector<size_t> recordCounter(nWays,1);
@@ -136,7 +133,8 @@ int main(int argc,char*argv[]) noexcept{
                 Record record= readers[i].getRecord();
                 minPriorityQueue.push({record.key,record.len,record.payload,i});
             }
-            size_t i=0;
+            size_t currFileOffset=0;
+
             while (minPriorityQueue.size()!=0){
                 auto [key,len,payload,way]=minPriorityQueue.top();
                 minPriorityQueue.pop();
@@ -144,19 +142,42 @@ int main(int argc,char*argv[]) noexcept{
                 r.key=key;
                 r.len=len;
                 r.payload=payload;
-                //std::cout<< i++ << "-" <<key << " " <<len << std::endl;
 
-                outBufWriter.addRecord(r);
+                ssize_t insertedBytes= outBufWriter.addRecord(r,false);
+                if(insertedBytes==-1){
+                    //bufer is full, flush it and make a new one
+                    size_t size=outBufWriter.getbufferOffset();
+                    char* buffer=outBufWriter.extractBuffer();
+
+                    #pragma omp taskwait
+
+                    #pragma omp task shared(currFileOffset,outFd) firstprivate(buffer,size)
+                    {
+                        ssize_t written= BufferedRecordWriter::flushBuffer(outFd,buffer,size,currFileOffset);
+                        delete buffer;
+                        currFileOffset+=written;
+                    }
+                    outBufWriter.addRecord(r,false);
+                }
+
+
+                outWrittenBytes+=Record::recordBytesSize(r);
+                
                 if(recordCounter[way]<sizes[way]){
                     const auto& newRecord=readers[way].getRecord();
                     recordCounter[way]++;
-                    outBufferBytes+= Record::recordBytesSize(newRecord);
                     minPriorityQueue.push({newRecord.key,newRecord.len,newRecord.payload,way});
                 }
+
             }
-            outBufWriter.flushBuffer();
-            
-            //outBufWriter.clear();
+
+            #pragma omp taskwait
+            //outBufWriter.flushBuffer();
+            size_t size=outBufWriter.getbufferOffset();
+            char* buffer=outBufWriter.extractBuffer();
+            ssize_t written= BufferedRecordWriter::flushBuffer(outFd,buffer,size,currFileOffset);
+            delete buffer;
+            outBufWriter.clear();
             for(size_t i=0;i<nWays;i++){
                 //    readers[i].clear();
             }

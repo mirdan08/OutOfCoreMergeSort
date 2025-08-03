@@ -142,16 +142,17 @@ class BufferedRecordWriter{
             setFile(fd,fileOffset);
         }
 
-        inline ssize_t addRecords(Record* records,const size_t recordsNum){
+        inline ssize_t addRecords(Record* records,const size_t recordsNum,bool autoFlush){
             ssize_t written=0;
             for(size_t i=0;i<recordsNum;++i){
-                written+=addRecord(records[i]);
+                written+=addRecord(records[i],autoFlush);
             }
             return written;
         }
 
-        inline ssize_t addRecord(const Record& record){
-            if(Record::recordBytesSize(record)+bufferOffset>=bufferSize) flushBuffer();
+        inline ssize_t addRecord(const Record& record,bool autoFlush){
+            if(Record::recordBytesSize(record)+bufferOffset>=bufferSize && autoFlush) flushBuffer();
+            if(Record::recordBytesSize(record)+bufferOffset>=bufferSize && !autoFlush) return -1;
             std::memcpy(buffer+bufferOffset,&record.key,sizeof(Record::key));
             std::memcpy(buffer+bufferOffset+sizeof(Record::key),&record.len,sizeof(Record::len));
             std::memcpy(buffer+bufferOffset+Record::headerBytesSize(),record.payload,record.len);
@@ -159,11 +160,16 @@ class BufferedRecordWriter{
             bufferOffset+=Record::recordBytesSize(record);
             return Record::recordBytesSize(record);
         }
+        inline void setFileOffset(size_t fileOffset){
+            this->fileOffset=fileOffset;
+        }
+        inline size_t getbufferOffset(){
+            return bufferOffset;
+        }
         inline size_t getFileOffset(){
             return fileOffset;
         }
         bool setFile(int fd,size_t fileOffset){
-            
             outFd = fd;
             if (outFd < 0) {
                 perror("open output file");
@@ -172,14 +178,40 @@ class BufferedRecordWriter{
             }
             bufferOffset=0;
             fileOffset=fileOffset;
-
-
-
-
             return true;
         }
         
         inline ssize_t flushBuffer(){
+            return flushBuffer(this->buffer);
+        }
+
+        inline char* extractBuffer(){
+            char* oldBuffer=buffer;
+            buffer=new char[maxBufferSize];
+            bufferOffset=0;
+            return oldBuffer;
+        }
+
+        static inline ssize_t flushBuffer(int outFd,char* buffer,size_t bufferSize,size_t fileOffset){
+            ssize_t totalWritten = 0;
+            //std::cout<< totalWritten << " "<< bufferSize << std::endl;
+            while (totalWritten < bufferSize) {
+                ssize_t written = pwrite(outFd, 
+                    buffer + totalWritten, 
+                    bufferSize - totalWritten, 
+                    fileOffset + totalWritten);
+                if (written < 0) {
+                    if (errno == EINTR) continue; // Interrupted? retry
+                    perror("pwrite");
+                    return -1;
+                }
+                if(written==0) break;
+                totalWritten += written;
+            }
+            return totalWritten;
+        }
+
+        inline ssize_t flushBuffer(char* buffer){
             ssize_t totalWritten = 0;
             while (totalWritten < bufferOffset) {
                 ssize_t written = pwrite(outFd, 
@@ -194,12 +226,13 @@ class BufferedRecordWriter{
                 if(written==0) break;
                 totalWritten += written;
             }
-            
-            std::cout << "offset before" << fileOffset;
             fileOffset+=totalWritten;
-            std::cout << "offset later" << fileOffset << std::endl;
             bufferOffset=0;
             return totalWritten;
+        }
+
+        ssize_t getBufferSize(){
+            return bufferSize;
         }
 
         ssize_t setBufferSize(size_t size){
@@ -242,10 +275,14 @@ class BufferedRecordReader{
         inline std::pair<size_t,std::vector<Record>>getRecords(uint64_t limit){
             uint64_t bufferSize=std::min(maxBufferSize,limit-fileOffset);
             uint64_t totalRead=0;
+
             const uint64_t chunkSize=64UL*1024UL*1024UL;
 
             while(totalRead<bufferSize){
-                uint64_t toRead=std::min(limit-(fileOffset+totalRead),chunkSize);
+                uint64_t fileRemaining = limit - (fileOffset + totalRead);
+                uint64_t bufferRemaining = bufferSize - totalRead;
+                uint64_t toRead = std::min({fileRemaining, bufferRemaining, chunkSize});
+
                 if(toRead==0) break;
 
                 ssize_t nRead = pread(inFd, buffer+totalRead,toRead, fileOffset+totalRead);
@@ -261,10 +298,8 @@ class BufferedRecordReader{
 
                 totalRead+=(uint64_t)nRead;
             }
-            
             std::vector<Record> result;
             bufferOffset=0;
-            
             while(bufferOffset<bufferSize){
                 //std::cout << bufferOffset << "/"<< bufferSize << std::endl;
                 uint32_t len;
@@ -276,6 +311,7 @@ class BufferedRecordReader{
                 }
                 std::memcpy(&key,buffer+bufferOffset,sizeof(Record::key));
                 std::memcpy(&len,buffer+bufferOffset+sizeof(Record::key),sizeof(Record::len));
+                //std::cout<< key << " " << len << std::endl;
                 //stop reading if the len is over the limit of the buffer
                 if(bufferOffset+sizeof(Record::key)+sizeof(Record::len)+len>bufferSize){
                     break;
@@ -343,6 +379,7 @@ class BufferedRunConsumer{
 
             }
         inline Record getRecord(){
+            std::cout<< currentPos << " " <<records.size() << std::endl;
             if(currentPos==records.size()){
                 const auto [newOffset,newRecords]=reader.getRecords(runLimit);
                 records=newRecords;
