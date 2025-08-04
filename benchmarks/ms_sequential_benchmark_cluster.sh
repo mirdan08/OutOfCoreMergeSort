@@ -1,9 +1,8 @@
-#!/bin/bash
 trials=5
-# 128b 1Gb 2Gb
 n_records=($((1024*1024*2)) $((1024*1024*2)) $((1024*1024*2)) $((5*1024*2))  $((5*1024*2)) $((10*1024*2)) $((20*1024*2)))
 max_payloads=($((5*1024))    $((10*1024))    $((20*1024))     $((1024*1024)) $((1024*1024)) $((1024*1024)) $((1024*1024)) )  
 
+memory_limit=($((1*1024*1024*1024)) $((5*1024*1024*1024)) $((10*1024*1024*1024)))
 
 make cleanall
 make payload_generator
@@ -27,23 +26,27 @@ done
 echo "files generated!"
 echo "starting experiments:"
 
+make cleanall
+make ms_sequential
+
 output_file="$1"
 touch "$output_file"
 echo "" > "$output_file"
-echo "iteration,max_payload_size,records_number,time(ms)" >> "$output_file"
+echo "iteration,max_payload_size,records_number,memory_limit,time(ms)" >> "$output_file"
 
 for i in $(seq 1 $trials); do
     for j in $(seq 0  $((n_combs-1))); do
         mp=${max_payloads[$j]}
         nr=${n_records[$j]}
-        make cleanall
-        make RPAYLOAD_MAX=$mp ms_sequential
-        echo "iteration=$i max_payload=$mp records_number=$nr"
-        output=$(srun --time=00:20:00 ./ms_sequential -i test_files/file_mp${mp}_nr${nr}.pms -o test_files/file_mp${mp}_nr${nr}_out.pms -v 0 )
-        echo "$output"
-        time_ms=$(echo "$output" | grep 'time(ms):' | awk -F ':' '{print $2}')
-        echo "$i,$mp,$nr,$time_ms" >> "$output_file"
-        rm test_files/file_mp${mp}_nr${nr}_out.pms
+        for m in "${memory_limit[@]}";do
+            echo "iteration=$i max_payload=$mp records_number=$nr memory_limit=$m"
+            output=$(srun --time=00:20:00  ./ms_sequential -i test_files/file_mp${mp}_nr${nr}.pms -o test_files/file_mp${mp}_nr${nr}_out.pms -m $m -v 0 )
+            echo "$output"
+            echo "$(./utilities/payload_generator -d test_files/file_mp${mp}_nr${nr}_out.pms)"
+            time_ms=$(echo "$output" | grep 'time(ms):' | awk -F ':' '{print $2}')
+            echo "$i,$mp,$nr,$m,$time_ms" >> "$output_file"
+            rm test_files/file_mp${mp}_nr${nr}_out.pms
+        done
     done
 done
 
