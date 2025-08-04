@@ -82,7 +82,7 @@ int main(int argc,char*argv[]){
         auto [newOffset,recordData]=bufReader.getRecords(fileSize);
         std::sort(recordData.begin(),recordData.end());
         ssize_t bytes= bufWriter.addRecords(recordData.data(),recordData.size(),true);
-        bytesOffsets.push_back(bufWriter.getFileOffset());
+        bytesOffsets.push_back(currentOffset);
         sizes.push_back(recordData.size());
         currentOffset=newOffset;
     }
@@ -110,17 +110,24 @@ int main(int argc,char*argv[]){
         minPriorityQueue.push({record.key,record.len,record.payload,i});
         outBufferBytes+= Record::recordBytesSize(record);
     }
-    size_t i=nWays;
+
+    size_t lastKey=0;
+    size_t i=0;
     while (minPriorityQueue.size()!=0){
         auto [key,len,payload,way]=minPriorityQueue.top();
         minPriorityQueue.pop();
+
         Record r;
         r.key=key;
         r.len=len;
         r.payload=payload;
+        lastKey=key;
+        i++;
+        
+
         outBufWriter.addRecord(r,true);
-        recordCounter[way]++;
         if(recordCounter[way]<sizes[way]){
+            recordCounter[way]++;
             const auto& newRecord=readers[way].getRecord();
             outBufferBytes+= Record::recordBytesSize(newRecord);
             minPriorityQueue.push({newRecord.key,newRecord.len,newRecord.payload,way});
@@ -129,7 +136,7 @@ int main(int argc,char*argv[]){
     
     outBufWriter.flushBuffer();
     
-    //outBufWriter.clear();
+    outBufWriter.clear();
     for(size_t i=0;i<nWays;i++){
     //    readers[i].clear();
     }
