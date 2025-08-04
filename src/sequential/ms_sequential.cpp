@@ -49,9 +49,9 @@ int main(int argc,char*argv[]){
     tmpFile.close();
 
     std::ofstream outFile(out_filename,std::ofstream::binary | std::ofstream::trunc);
-    tmpFile.seekp(fileSize-1);
-    tmpFile.put(0);
-    tmpFile.close();
+    outFile.seekp(fileSize-1);
+    outFile.put(0);
+    outFile.close();
 
     
     
@@ -63,18 +63,18 @@ int main(int argc,char*argv[]){
     int inFd =open(in_filename.c_str(),O_RDONLY);
     if (inFd < 0) {
         perror("open input file");
-        return false;
+        return -1;
     }
     int outFd =open(out_filename.c_str(),O_WRONLY);
     if (outFd < 0) {
         perror("open output file");
-        return false;
+        return -1;
     }
     std::string tmp="tmp_run";
     int tmpFd =open(tmp.c_str(),O_RDWR);
     if (tmpFd < 0) {
         perror("open tmp file");
-        return false;
+        return -1;
     }
     BufferedRecordWriter bufWriter(tmpFd,0,memory_limit/2);
     BufferedRecordReader bufReader(inFd,0,memory_limit/2);
