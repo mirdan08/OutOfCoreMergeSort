@@ -11,295 +11,197 @@
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
+#include <filesystem>
 
-//initial sorter for mergesort
-struct SortingEmitter : public ff::ff_monode_t<int, IndexPair> {
-    SortingEmitter(std::vector<IndexPair>& sorted_ranges)
-        :sorted_ranges(sorted_ranges) {};
+struct RecordBatchEmitter: ff::ff_monode_t<
+    int,
+    std::tuple<size_t, std::vector<Record>,char*>
+>{
+    size_t currentOffset=0;
+        
+    std::vector<size_t> bytesOffsets;
+    std::vector<size_t> sizes;
 
-    IndexPair* svc(int* in) {
-        for(const auto& [range_start,range_end]:sorted_ranges){
-            ff_send_out(new IndexPair(range_start,range_end));
-        }
+
+    BufferedRecordReader bufReader;
+    size_t fileSize;
+    public:
+        RecordBatchEmitter(int inFd,int tmpFd,size_t readerMemoryLimit,size_t writerMemoryLimit,size_t fileSize):
+            bufReader(inFd,0,std::max(writerMemoryLimit,32UL*1024UL*1024UL )),
+            fileSize(fileSize)
+
+            {}
+
+        std::tuple<size_t, RecordVec,char*>* svc(int* in){
+            while(currentOffset<fileSize){
+                auto [newOffset,recordData]=bufReader.getRecords(fileSize);
+                size_t batchSize=newOffset-currentOffset;
+                char* buffer=bufReader.extractBuffer();
+                currentOffset+=batchSize;
+                ff_send_out(new std::tuple<size_t, RecordVec, char*>(batchSize, recordData, buffer));
+            }
+            bufReader.clear();
+            return EOS;
+        }    
+};
+
+struct RecordBatchSorter: ff::ff_minode_t<
+    std::tuple<size_t, RecordVec, char*>,
+    std::tuple<size_t, RecordVec, char*>
+>{
+    std::tuple<size_t, RecordVec, char*>* svc(std::tuple<size_t, RecordVec, char*>* in){
+        auto [batchSize,records,buffer] = *in;
+        std::sort(records.begin(),records.end());
+        return new std::tuple<size_t, RecordVec, char*>(batchSize,records,buffer);
+    }
+};
+
+struct RecordBatchCollector: ff::ff_minode_t<
+    std::tuple<size_t, RecordVec, char*>,
+    std::pair<std::vector<size_t>,std::vector<size_t>>
+>
+{
+    BufferedRecordWriter bufWriter;
+    size_t currFilleOffset=0;
+    size_t runsOffset=0;
+    std::vector<size_t> sizes;
+    std::vector<size_t> offsets;
+    size_t fileSize;
+    int tmpFd;
+
+    RecordBatchCollector(int tmpFd,size_t readerMemoryLimit,size_t fileSize):
+        bufWriter(tmpFd,0,readerMemoryLimit),
+        fileSize(fileSize),
+        tmpFd(tmpFd)
+        {}
+
+    std::pair<std::vector<size_t>,std::vector<size_t>>* svc(std::tuple<size_t, RecordVec, char*>* in){
+        auto [batchSize,recordData,buffer] = *in;
+        
+        sizes.push_back(recordData.size());
+        offsets.push_back(runsOffset);
+        runsOffset+=batchSize;
+        bufWriter.addRecords(recordData.data(),recordData.size(),true);
+
+        delete buffer;
+        if(runsOffset<fileSize) return GO_ON;
+        ff_send_out(new std::pair(sizes,offsets));
+        
+        bufWriter.flushBuffer();
+        bufWriter.clear();
+        fsync(tmpFd);
+        lseek(tmpFd, 0, SEEK_SET);
+
         return EOS;
     }
-private:
-    size_t stream_size;
-    size_t workers_num;
-    std::vector<IndexPair>& sorted_ranges;
 };
-struct SortingCollector: public ff::ff_minode_t<IndexPair,size_t>{
-    size_t p;
-    size_t counter=0;
-    SortingCollector(size_t p):p(p){   
-    }
-    size_t* svc(IndexPair* in){
-        counter++;
-        //std::cout<< "collecting " <<counter << std::endl;
-        if(counter>=p){
-            for(size_t i=0;i<p;i++){
-                ff_send_out(new size_t(i));
-            }
-            return EOS;
+
+struct RecordMerger: ff::ff_minode_t<
+    std::pair<std::vector<size_t>,std::vector<size_t>>,
+    void
+>
+{
+    size_t fileSize;
+    size_t memoryLimit;
+    int tmpFd;
+    int outFd;
+    std::atomic<bool>& writerBusy;
+
+    RecordMerger(std::atomic<bool>& writerBusy,int tmpFd,int outFd,size_t fileSize,size_t memoryLimit):
+        writerBusy(writerBusy),
+        tmpFd(tmpFd),
+        outFd(outFd),
+        memoryLimit(memoryLimit),
+        fileSize(fileSize)
+    {}
+
+    void* svc(std::pair<std::vector<size_t>,std::vector<size_t>>* in){
+        
+        auto [sizes,offsets] = *in;
+        
+        size_t nWays=offsets.size();
+        std::vector<BufferedRunConsumer> readers;
+        
+        for(size_t i=0;i<nWays-1;i++){
+            readers.emplace_back(tmpFd,offsets[i],memoryLimit/(nWays+1),offsets[i+1]);
         }
-        return GO_ON;
-
-    }
-};
-//initial sorter for mergesort
-struct SortingWorker: public ff::ff_monode_t<IndexPair,IndexPair>{
-    SortingWorker(PosKeyVec& data):data(data){};
-    IndexPair* svc(IndexPair* in){
-        //std::cout<< in->first << " - " <<in->second << std::endl;
-        radix_sort_buffer(data.data()+(in->first),in->second-in->first);
-        return in;
-    }
-    private:
-        PosKeyVec& data;
-};
-// ---- SelectWorker: receives k and outputs k-th global key ----
-struct SelectWorker : ff::ff_node_t<size_t,uint64_t> {
-    const PosKeyVec& data;
-    const std::vector<IndexPair> ranges;
-
-    SelectWorker(const PosKeyVec& d, const std::vector<IndexPair> r) : data(d), ranges(r) {};
-
-    uint64_t* svc(size_t* task) {
-        size_t k = *task;
-        uint64_t* result = new uint64_t(ms_select2(data, ranges, k));
-        //delete task;
-        return result;
-    }
-};
-
-// ---- SelectCollector: gathers pivots and reports them ----
-struct SelectCollector : ff::ff_minode_t<uint64_t,std::vector<IndexPair>> {
-    size_t p;
-    std::vector<uint64_t> pivots;
-    PosKeyVec& data;
-    std::vector<IndexPair>& ranges;
-    SelectCollector(size_t p,PosKeyVec& data,std::vector<IndexPair>& ranges): 
-         p(p),
-         data(data),
-         ranges(ranges){
-        pivots.reserve(p - 1);
-    }
-
-    std::vector<IndexPair>* svc(uint64_t* task) {
-        pivots.push_back(*task);
-
-        //all pivots a received or you have only one worker
-        if (pivots.size() == p - 1 || p==1) {
-            //std::cout<< "pivots are built" << std::endl;
-            std::vector<std::vector<IndexPair>> bucket_subranges(p,std::vector<IndexPair>(p));
-
-            for (int j=0;j<ranges.size();j++) {
-                const size_t start=ranges[j].first;
-                const size_t end=ranges[j].second;
-                
-
-                build_pivot_subrange(start,end,j,pivots,data,bucket_subranges);
-            }
-            for (size_t b = 0; b < p; ++b) {
-                const auto& range=bucket_subranges[b];
-                ff_send_out(new std::vector<IndexPair>(range));
-            }
-            return EOS;
+        readers.emplace_back(tmpFd,offsets[nWays-1],memoryLimit/(nWays+1),fileSize);
+        
+        std::priority_queue<HeapNodeRecord, std::vector<HeapNodeRecord>, std::greater<HeapNodeRecord>> minPriorityQueue;
+        size_t outWrittenBytes=0;
+        BufferedRecordWriter outBufWriter(outFd,0,memoryLimit/(nWays+1));
+        
+        std::vector<size_t> recordCounter(nWays,1);
+        for(size_t i=0;i<nWays;i++){
+            Record record= readers[i].getRecord();
+            minPriorityQueue.push({record.key,record.len,record.payload,i});
         }
-        return GO_ON;
+        
+        while (minPriorityQueue.size()!=0){
+            auto [key,len,payload,way]=minPriorityQueue.top();
+            minPriorityQueue.pop();
+            Record r;
+            r.key=key;
+            r.len=len;
+            r.payload=payload;
+
+            ssize_t insertedBytes= outBufWriter.addRecord(r,false);
+            if(insertedBytes==-1){
+                //bufer is full, flush it and make a new one
+                size_t size=outBufWriter.getbufferOffset();
+                char* buffer=outBufWriter.extractBuffer();
+
+                while(writerBusy.load());
+                writerBusy.store(true);
+
+                ff_send_out(new std::tuple<char*,size_t,size_t>(buffer,size,0));
+                outBufWriter.addRecord(r,false);
+            }
+            outWrittenBytes+=Record::recordBytesSize(r);
+            
+            if(recordCounter[way]<sizes[way]){
+                const auto& newRecord=readers[way].getRecord();
+                recordCounter[way]++;
+                minPriorityQueue.push({newRecord.key,newRecord.len,newRecord.payload,way});
+            }
+
+        }
+        
+        while(writerBusy.load());
+        writerBusy.store(true);
+        
+        size_t size=outBufWriter.getbufferOffset();
+        char* buffer=outBufWriter.extractBuffer();
+        ff_send_out(new std::tuple<char*,size_t,size_t>(buffer,size,0));
+
+        outBufWriter.clear();
+        for(size_t i=0;i<nWays;i++){
+            readers[i].clear();
+        }
+
+        return EOS;
     }
 };
 
-struct SubMergeWorker : ff::ff_node_t<
-std::vector<IndexPair>,
-PosKeyVec
+struct RecordBatchWriter: ff::ff_minode_t<
+std::tuple<char*,size_t,size_t>,
+void
 >{
+    std::atomic<bool>& writerBusy;
+    size_t globalFileOffset=0;
+    int outFd;
 
-    PosKeyVec& data;
-    SubMergeWorker(PosKeyVec& data):data(data){}
-    
-    PosKeyVec* svc(std::vector<IndexPair>* task) {
-        size_t size=0;
-        for(const auto& p:*task){
-            size+=p.second-p.first;
-        }
-        PosKeyVec* merged=new PosKeyVec(size);
-        k_way_merge_buffer(data.data(),*task,merged->data(),size);
-        // Process or store `merged` as needed
-        return merged;
-    }
-    
-};
-struct SubRangeCollector : ff::ff_minode_t<
-PosKeyVec,
-int
->{
-    PosKeyVec& data;
-    std::vector<PosKeyVec*> sub_ranges;
-    PosKeyVec& result;
-    int range_counter=0;
-    int num_workers;
-    std::string out_filename;
-    std::string in_filename;
-    size_t file_size;
-    SubRangeCollector(int num_workers,PosKeyVec& data,PosKeyVec& result,std::string in_filename,std::string out_filename)
-    :num_workers(num_workers),
-    data(data),
-    result(result),
-    out_filename(out_filename),
-    in_filename(in_filename)
-    {};
+    RecordBatchWriter(std::atomic<bool>& writerBusy,int outFd)
+    :writerBusy(writerBusy),globalFileOffset(globalFileOffset),outFd(outFd){}
 
-    int* svc(PosKeyVec* task) {
-        auto* merged_result = task;
-        if(!merged_result->empty()){
-            sub_ranges.push_back(merged_result);
-        }
-        //delete task;
-        range_counter++;
-        if(range_counter==num_workers){
-            std::sort(
-                sub_ranges.begin(),sub_ranges.end(),
-                [](PosKeyVec* a,PosKeyVec* b){
-                    return a->front().key < b->front().key;
-                }
-            );
-            std::ifstream in_file(in_filename,std::ifstream::binary | std::ifstream::ate);
-            size_t file_size= in_file.tellg();
-            in_file.close();
-            std::ofstream out_file(out_filename,std::ofstream::binary);
-            out_file.seekp(file_size-1);
-            out_file.put(0);
-            out_file.close();
-            size_t byte_counter=0;
-            for(const auto& range:sub_ranges){
-                auto* res=new std::pair(byte_counter,range);
-                //std::cout<< byte_counter << std::endl;
-                ff_send_out(res);
-                for(auto& pkp:*range){
-                    byte_counter+=pkp.len+sizeof(uint64_t)+sizeof(uint64_t);
-                }
-            }
-            return EOS;
-        }
+    void* svc(std::tuple<char*,size_t,size_t>* in){
+        auto [buffer,size,fileOffset]=*in;
+        ssize_t written= BufferedRecordWriter::flushBuffer(outFd,buffer,size,globalFileOffset);
+        globalFileOffset+=written;
+        writerBusy.store(false);
         return GO_ON;
     }
-    
 };
-
-struct FileWriter: ff::ff_minode_t<
-    std::pair<size_t,PosKeyVec*>,
-    int
->{
-    size_t num_workers;
-    std::string out_filename;
-    std::string in_filename;
-    size_t memory_limit;
-    FileWriter(std::string in_filename,std::string out_filename,size_t num_workers,size_t memory_limit)
-    :out_filename(out_filename),in_filename(in_filename),num_workers(num_workers),memory_limit(memory_limit){};
-    int* svc(std::pair<size_t,PosKeyVec*>* in){
-        size_t byte_offset=in->first;
-        //std::cout << "writing sorted at"<< byte_offset << " " << in->second->size()<<std::endl;
-        buffered_poskey_write_pread(in_filename,out_filename,byte_offset,in->second->data(),in->second->size(),payload_max,memory_limit);
-        /* PosKeyVec* merged_result=in->second;
-
-        int fd = open(out_filename.c_str(),O_RDWR);
-        if (fd < 0) {
-            perror("open");
-        }
-        std::ifstream in_file(in_filename,std::ofstream::binary);
-        char buffer[payload_max];
-        //Note: buffering cannot be applied as we don't know where the records are the be read from
-        //there is still a form of buffering in the ofstream library
-        for(auto& pkp:*merged_result){
-            in_file.seekg(pkp.offset+sizeof(uint64_t)+sizeof(uint64_t));
-            in_file.read(buffer,pkp.len);
-            pwrite(fd,&pkp.key,sizeof(pkp.key),byte_offset);
-            pwrite(fd,&pkp.len,sizeof(pkp.len),byte_offset+sizeof(pkp.key));
-            pwrite(fd,buffer,pkp.len,byte_offset+sizeof(pkp.key)+sizeof(pkp.len));
-            byte_offset+=sizeof(pkp.key)+sizeof(pkp.len)+pkp.len;
-        }
-        in_file.close();
-        close(fd); */
-        return new int(byte_offset);
-    }
-};
-
-
-// ---- SelectEmitter: emits k values for pivot search ----
-struct SelectEmitter : ff::ff_node_t<size_t,size_t> {
-    size_t n, p, current = 1;
-    SelectEmitter(size_t n, size_t p) : n(n), p(p) {};
-    size_t* svc(size_t* in) {
-        if (current > p - 1 && p!=1) return EOS;
-        size_t* k = new size_t(current * n / p);
-        ++current;
-        return k;
-    }
-};
-
-void sort_with_ff(
-    PosKeyVec& data,std::string in_filename,std::string out_filename,
-    size_t sorting_workers,size_t num_workers,
-    PosKeyVec& result,size_t memory_limit
-){
-    std::vector<IndexPair> sorted_ranges;
-    size_t chunk_base = data.size() / num_workers;
-    size_t remainder = data.size() % num_workers;
-
-    size_t start = 0;
-    for (size_t i = 0; i < num_workers; ++i) {
-        size_t chunk_size = chunk_base + (i < remainder ? 1 : 0);
-        size_t end = start + chunk_size;
-        sorted_ranges.push_back(IndexPair(start,end));
-        start = end;
-    }
-    ff::ff_farm sorting_farm;
-    std::vector<ff::ff_node*> workers;
-    sorting_farm.add_emitter(SortingEmitter (sorted_ranges));
-    for (int i=0;i<sorting_workers;i++){
-        workers.push_back(new SortingWorker(data));
-    }
-    sorting_farm.add_workers(workers);
-    sorting_farm.add_collector(new SortingCollector(sorting_workers));
-
-    ff::ff_farm  ranking_farm;
-    ranking_farm.add_emitter(SelectEmitter(data.size(),num_workers));
-    std::vector<ff::ff_node*> rank_workers;
-    for (int i=0;i<sorting_workers;i++){
-        rank_workers.push_back(new SelectWorker(data,sorted_ranges));
-    }
-    ranking_farm.add_workers(rank_workers);
-    SelectCollector sc(num_workers,data,sorted_ranges);
-    ranking_farm.add_collector(&sc);
-
-    ff::ff_farm subranges_sorting_farm;
-    std::vector<ff::ff_node*> subrange_workers;
-    for (int i=0;i<sorting_workers;i++){
-        subrange_workers.push_back(new SubMergeWorker(data));
-    }
-    subranges_sorting_farm.add_workers(subrange_workers);
-    SubRangeCollector src(num_workers,data,result,in_filename,out_filename);
-    subranges_sorting_farm.add_collector(&src);
-
-    ff::ff_farm writing_farm;
-
-    std::vector<ff::ff_node* > writer_worker;
-
-    for(int i=0;i<sorting_workers;i++){
-        writer_worker.push_back(new FileWriter(in_filename,out_filename,num_workers,memory_limit/sorting_workers));
-    }
-    writing_farm.add_workers(writer_worker);
-
-    ff::ff_pipeline pipeline;
-    pipeline.add_stage(&sorting_farm);
-    pipeline.add_stage(&ranking_farm);
-    pipeline.add_stage(&subranges_sorting_farm);
-    pipeline.add_stage(&writing_farm);
-    if(pipeline.run_and_wait_end()<0)
-        std::cerr << "errors with the pipeline" << std::endl;
-
-}
 
 int main(int argc,char*argv[]){
     uint64_t records_num=0;
@@ -321,32 +223,80 @@ int main(int argc,char*argv[]){
         std::cout << "please specify the output file path" << std::endl;
         return 1;
     }
+
+
     auto start_time = std::chrono::high_resolution_clock::now();
-    std::vector<PosKeyPair> pos_key_data= std::move(read_records_pread(in_filename,memory_limit));
 
-    if (verbose){
-        unsigned int i=0;
-        for(const auto& pkp:pos_key_data){
-            std::cout<< i++ << "\t[" << pkp.pos << ":" << pkp.key << "]" << std::endl;
-        }
+    std::ifstream in_file(in_filename,std::ifstream::binary | std::ifstream::ate);
+    size_t fileSize= in_file.tellg();
+    in_file.close();
+    
+    std::ofstream tmpFile("tmp_run",std::ofstream::binary | std::ofstream::trunc);
+    tmpFile.seekp(fileSize-1);
+    tmpFile.put(0);
+    tmpFile.close();
+
+    std::ofstream outFile(out_filename,std::ofstream::binary | std::ofstream::trunc);
+    outFile.seekp(fileSize-1);
+    outFile.put(0);
+    outFile.close();
+
+    int inFd =open(in_filename.c_str(),O_RDONLY);
+    if (inFd < 0) {
+        perror("open input file");
+        return 1;
     }
 
-    size_t num_workers=threads_num;
-    PosKeyVec result;
-    sort_with_ff(
-        pos_key_data,in_filename,out_filename,
-        num_workers,num_workers,
-        result,
-        memory_limit
-    );
+    int outFd =open(out_filename.c_str(),O_WRONLY);
+    if (outFd < 0) {
+        perror("open output file");
+        return 1;
+    }
 
+    std::string tmp="tmp_run";
+    int tmpFd =open(tmp.c_str(),O_RDWR);
+    if (tmpFd < 0) {
+        perror("open tmp file");
+        return 1;
+    }
+
+    RecordBatchEmitter recordBatchEmitter(inFd,tmpFd,memory_limit/2,(memory_limit/2)/threads_num,fileSize);
+    
+    ff::ff_node* recordBatchCollector=new RecordBatchCollector (tmpFd,memory_limit/2,fileSize);
+
+    std::vector<ff::ff_node*> sorters;
+    for(size_t i=0;i<threads_num;i++){
+        sorters.push_back(new RecordBatchSorter());
+    }
+
+    ff::ff_farm runFarm;
+    runFarm.add_emitter(recordBatchEmitter);
+    runFarm.add_workers(sorters);
+    runFarm.add_collector(recordBatchCollector);
+    
+    std::atomic<bool> writerBusy(false);
+    RecordMerger recordMerger(writerBusy,tmpFd,outFd,fileSize,memory_limit);
+
+    ff::ff_farm mergeFarm;
+
+    mergeFarm.add_emitter(recordMerger);
+
+    std::vector<ff::ff_node*> writer;
+    writer.push_back(new RecordBatchWriter(writerBusy,outFd));
+    mergeFarm.add_workers(writer);
+    mergeFarm.remove_collector();
+    
+    ff::ff_pipeline msFarm;
+    msFarm.add_stage(runFarm);
+    msFarm.add_stage(mergeFarm);
+    msFarm.run_and_wait_end();
+    
+    std::filesystem::remove("tmp_run");
+    close(outFd);
+    close(inFd);
+    close(tmpFd);
+    
     auto end_time = std::chrono::high_resolution_clock::now();
-    if (verbose){
-        unsigned int i=0;
-        for(const auto& pkp:result){
-            std::cout<< i++ << "\t[" << pkp.pos << ":" << pkp.key << "]" << std::endl;
-        }
-    }
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
     std::cout<< "time(ms):" << duration.count() << std::endl;
 
