@@ -9,17 +9,13 @@
 #include <cstring>
 #include <iostream>
 #include <omp.h>
+#include<optional>
+#include<mpi.h>
 
 #pragma once
 
-#ifndef RPAYLOAD_MAX
+#define _FILE_OFFSET_BITS 64#ifndef RPAYLOAD_MAX
 #define RPAYLOAD_MAX 100
-#endif
-
-#define _FILE_OFFSET_BITS 64
-
-//max payload size
-const unsigned long payload_max= RPAYLOAD_MAX;
 
 //default max memory limit for single node
 const unsigned long MAX_MEMORY_LIMIT=1UL*1024UL*1024UL*1024UL;
@@ -38,79 +34,6 @@ struct Record {
         return headerBytesSize()+instance.len;
     }
 };
-
-struct MemoryRecord{
-    uint32_t len; 
-    uint64_t key; 
-    uint64_t offset;
-};
-//used to sort the values within a single node
-struct PosKeyPair{
-    uint64_t key; 
-    uint64_t pos;
-    uint64_t len;
-    uint64_t offset; 
-};
-
-
-void write_record(Record& record,std::ofstream& out_file);
-
-
-using PosKeyVec=std::vector<PosKeyPair>;
-
-using RecordVec=std::vector<Record>;
-
-using IndexPair=std::pair<unsigned long,unsigned long>;
-using SortResult=std::tuple<unsigned long,unsigned long,unsigned long>;
-
-uint64_t ms_select(const PosKeyVec& data, const std::vector<IndexPair> ranges, int k) ;
-uint64_t ms_select2(const std::vector<PosKeyPair>& data,
-    const std::vector<std::pair<size_t, size_t>>& sorted_ranges,
-    size_t global_rank) noexcept ;
-
-size_t raw_upper_bound(const PosKeyPair* data, size_t size, uint64_t value) noexcept;
-void k_way_merge_buffer(
-        PosKeyPair* src_data,
-        std::vector<IndexPair>& subranges,
-        PosKeyPair* dst_data,
-        const size_t count
-    ) noexcept;
-
-std::vector<PosKeyPair> k_way_merge_from_ranges(const PosKeyVec& data,const std::vector<IndexPair>& subranges);
-void radix_sort_by_key(PosKeyVec& data) noexcept;
-void radix_sort_buffer(PosKeyPair* data, size_t n);
-std::vector<PosKeyPair> k_way_merge_heap(
-    const PosKeyVec& data,
-    const std::vector<IndexPair>& subranges
-) noexcept ;
-
-//void radix_sort_slice(PosKeyVec& data, size_t start, size_t end) noexcept ;
-void buffered_poskey_write(const std::string in_filename,const std::string out_filename,size_t file_offset,PosKeyPair* data,size_t data_count,size_t payload_max,size_t memory_limit);
-void build_pivot_subrange(
-    size_t start,size_t end, int j,
-    const std::vector<uint64_t>& pivots,
-    const std::vector<PosKeyPair>& data,
-    std::vector<std::vector<IndexPair>>& bucket_subranges 
-);
-
-void buffered_poskey_write_pread(
-    const std::string& in_filename,
-    const std::string& out_filename,
-    size_t file_offset,
-    PosKeyPair* data,
-    size_t data_count,
-    size_t payload_max,
-    size_t memory_limit);
-
-std::pair<size_t,RecordVec*> bufferedRecordRead(
-    const std::string& in_filename,
-    const std::string& out_filename,
-    size_t file_offset,
-    PosKeyPair* data,
-    size_t data_count,
-    size_t payload_max,
-    size_t memory_limit);
-
 
 struct HeapNodeRecord {
     uint64_t key;          // Key for sorting
@@ -158,6 +81,7 @@ class BufferedRecordWriter{
             std::memcpy(buffer+bufferOffset+Record::headerBytesSize(),record.payload,record.len);
             
             bufferOffset+=Record::recordBytesSize(record);
+
             return Record::recordBytesSize(record);
         }
         inline void setFileOffset(size_t fileOffset){
@@ -270,6 +194,33 @@ class BufferedRecordReader{
             buffer=new char[maxBufferSize];
             maxBufferSize=maxBufferSize;
             setFile(fd,fileOffset);
+        }
+        
+        static std::vector<Record> buildRecordBatch(char* buffer,size_t batchSize){
+            size_t offset=0;
+            std::vector<Record> records;
+            while(offset<batchSize){
+                uint64_t key;
+                uint32_t len;
+                char* bufferPtr;
+                if(offset+Record::headerBytesSize()>=batchSize){ 
+                    break;
+                }
+                std::memcpy(&key,buffer+offset,sizeof(Record::key));
+                std::memcpy(&len,buffer+offset+sizeof(Record::key),sizeof(Record::len)); 
+
+                if(offset+Record::headerBytesSize()+len>=batchSize){
+                    break;
+                }
+                bufferPtr=buffer+offset+Record::headerBytesSize();
+                records.emplace_back(len,key,bufferPtr);
+                offset+=Record::headerBytesSize()+len;
+            }
+            return records;
+        }
+
+        inline uint64_t getFileOffset(){
+            return fileOffset;
         }
 
         inline std::pair<size_t,std::vector<Record>>getRecords(uint64_t limit){
@@ -390,5 +341,42 @@ class BufferedRunConsumer{
 
         void clear(){
             reader.clear();
+        }
+};
+
+class RankRunConsumer{
+    std::vector<Record> records;
+    size_t currentPos=0;
+    size_t runLimit;
+    char* buffer=nullptr;
+    int rank;
+    int tag;
+    public:
+        RankRunConsumer(int rank,int tag):rank(rank),tag(tag){}
+        inline std::optional<Record> getRecord(){
+            if(currentPos==records.size()){
+
+                MPI_Recv(&runLimit,1,MPI_UNSIGNED_LONG,rank,tag,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
+                if(runLimit==0) return std::nullopt;
+                if(buffer!=nullptr){
+                    delete buffer;
+                    buffer=nullptr;
+                } 
+                
+                buffer=new char[runLimit];
+                MPI_Recv(buffer,runLimit,MPI_CHAR,rank,tag,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
+
+                std::cout<< rank << " sent " << runLimit << std::endl;
+                records=BufferedRecordReader::buildRecordBatch(buffer,runLimit);
+                currentPos=0;
+            }
+            return records[currentPos++];
+        }
+
+        void clear(){
+            if(buffer!=nullptr) {
+                delete buffer;
+                buffer =nullptr;
+            }
         }
 };
