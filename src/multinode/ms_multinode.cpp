@@ -179,7 +179,7 @@ int main(int argc,char*argv[]) noexcept{
                 //bufer is full, flush it and make a new one
                 size_t size=outBufWriter.getbufferOffset();
                 char* buffer=outBufWriter.extractBuffer();
-
+                
                 #pragma omp taskwait
 
                 #pragma omp task shared(currFileOffset,outFd) firstprivate(buffer,size)
@@ -319,6 +319,10 @@ int main(int argc,char*argv[]) noexcept{
                     MPI_Send(buffer,size,MPI_CHAR,0,0,MPI_COMM_WORLD);
                     delete buffer;
                 }
+
+                size_t val=0;
+                MPI_Send( &val , 1 , MPI_UNSIGNED_LONG, 0 , 0 , MPI_COMM_WORLD);
+
                 outBufWriter.clear();
 
             }
