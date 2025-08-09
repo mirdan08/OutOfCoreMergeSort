@@ -10,6 +10,7 @@
 #include <iostream>
 #include <omp.h>
 #include<optional>
+#include<cassert>
 #include<mpi.h>
 
 #pragma once
@@ -118,14 +119,13 @@ class BufferedRecordWriter{
 
         static inline ssize_t flushBuffer(int outFd,char* buffer,size_t bufferSize,size_t fileOffset){
             ssize_t totalWritten = 0;
-            //std::cout<< totalWritten << " "<< bufferSize << std::endl;
             while (totalWritten < bufferSize) {
                 ssize_t written = pwrite(outFd, 
                     buffer + totalWritten, 
                     bufferSize - totalWritten, 
                     fileOffset + totalWritten);
                 if (written < 0) {
-                    if (errno == EINTR) continue; // Interrupted? retry
+                    if (errno == EINTR) continue;
                     perror("pwrite");
                     return -1;
                 }
@@ -142,14 +142,16 @@ class BufferedRecordWriter{
                     buffer + totalWritten, 
                     bufferOffset - totalWritten, 
                     fileOffset + totalWritten);
-                if (written < 0) {
-                    if (errno == EINTR) continue; // Interrupted? retry
-                    perror("pwrite");
-                    return -1;
-                }
-                if(written==0) break;
-                totalWritten += written;
+                    if (written < 0) {
+                        if (errno == EINTR) continue; // Interrupted? retry
+                        perror("pwrite");
+                        std::cout<< "error in buffer flushing" << std::endl;
+                        return -1;
+                    }
+                    if(written==0) break;
+                    totalWritten += written;
             }
+            
             fileOffset+=totalWritten;
             bufferOffset=0;
             return totalWritten;
@@ -209,7 +211,7 @@ class BufferedRecordReader{
                 std::memcpy(&key,buffer+offset,sizeof(Record::key));
                 std::memcpy(&len,buffer+offset+sizeof(Record::key),sizeof(Record::len)); 
 
-                if(offset+Record::headerBytesSize()+len>=batchSize){
+                if(offset+Record::headerBytesSize()+len>batchSize){
                     break;
                 }
                 bufferPtr=buffer+offset+Record::headerBytesSize();
@@ -366,7 +368,6 @@ class RankRunConsumer{
                 buffer=new char[runLimit];
                 MPI_Recv(buffer,runLimit,MPI_CHAR,rank,tag,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
 
-                std::cout<< rank << " sent " << runLimit << std::endl;
                 records=BufferedRecordReader::buildRecordBatch(buffer,runLimit);
                 currentPos=0;
             }
