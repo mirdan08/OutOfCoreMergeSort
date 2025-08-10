@@ -261,6 +261,7 @@ int main(int argc,char*argv[]) noexcept{
                             bytesOffsets.push_back(runsOffset);
                             sizes.push_back(recordData.size());
                             ssize_t written= BufferedRecordWriter::flushBuffer(tmpFd,newBuffer,batchSize,runsOffset);
+                            assert(written==batchSize);
                             delete buffer;
                             delete newBuffer;
                             //currFileOffset+=written;
@@ -275,7 +276,7 @@ int main(int argc,char*argv[]) noexcept{
                         }
                     }
                 }
-                #pragma omp wait
+                #pragma omp taskwait
                 
                 bufWriter.flushBuffer();
                 bufWriter.clear();
