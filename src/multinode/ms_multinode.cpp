@@ -15,6 +15,7 @@
 #include <queue>
 #include <numeric>
 #include <queue>
+#include <filesystem>
 #include <mpi.h>
 
 int main(int argc,char*argv[]) noexcept{
@@ -39,7 +40,9 @@ int main(int argc,char*argv[]) noexcept{
     }
 
 
-    auto start_time = std::chrono::high_resolution_clock::now();
+    auto start_time = MPI_Wtime();
+    //std::chrono::high_resolution_clock::now();
+
         std::ifstream in_file(in_filename,std::ifstream::binary | std::ifstream::ate);
     size_t fileSize= in_file.tellg();
     in_file.close();
@@ -86,7 +89,7 @@ int main(int argc,char*argv[]) noexcept{
         size_t bytesTraveling=0;
 
         std::vector<MPI_Request> reqs;
-        std::vector<size_t> sizes;
+        std::vector<size_t> runsSizes;
 
         size_t i;
 
@@ -95,29 +98,26 @@ int main(int argc,char*argv[]) noexcept{
         size_t chunkIdx=0;
         while(currentOffset<fileSize){
             i=0;
-            /* while(bytesTraveling>=memory_limit && i<reqs.size()){
+            while(bytesTraveling>=memory_limit && i<reqs.size()){
                 if(reqs[i]!=MPI_REQUEST_NULL) {
-                    std::cout<< i << std::endl;
                     MPI_Wait(&reqs[i],MPI_STATUS_IGNORE);
-                    //delete buffers[i];
-                    bytesTraveling-=sizes[i];
+                    delete buffers[i];
+                    bytesTraveling-=runsSizes[i];
                 }
                 i++;
                 reqs[i]=MPI_REQUEST_NULL;
-            } */
+            }
 
             auto [newOffset,recordData]=bufReader.getRecords(fileSize);
             size_t batchSize=newOffset-currentOffset;
             
             char* buffer=bufReader.extractBuffer();
-            //buffers.push_back(buffer);
-            sizes.push_back(batchSize);
             MPI_Request request;
             reqs.push_back(request);
+            runsSizes.push_back(batchSize);
             MPI_Send(&batchSize,1,MPI_UNSIGNED_LONG,rankIdx,0,MPI_COMM_WORLD);
-            MPI_Send(buffer,batchSize,MPI_CHAR,rankIdx,0,MPI_COMM_WORLD);
-            delete buffer;
-            
+            MPI_Isend(buffer,batchSize,MPI_CHAR,rankIdx,0,MPI_COMM_WORLD,&reqs.back());
+            buffers.push_back(buffer);
             chunkIdx++;
             bytesTraveling+=batchSize;
             currentOffset=newOffset;
@@ -133,19 +133,13 @@ int main(int argc,char*argv[]) noexcept{
         }
         bufReader.clear();
 
-
-        i=0;
-/*         while(bytesTraveling>=memory_limit && i<reqs.size()){
+        for(size_t i=0;i<reqs.size();++i){
+            MPI_Wait(&reqs[i],MPI_STATUS_IGNORE);
             if(reqs[i]!=MPI_REQUEST_NULL) {
                 MPI_Wait(&reqs[i],MPI_STATUS_IGNORE);
                 delete buffers[i];
-                bytesTraveling-=sizes[i];
             }
-            i++;
-            reqs[i]=MPI_REQUEST_NULL;
-        } */
-                    
-        //size_t nWays=bytesOffsets.size();
+        }
 
         std::vector<RankRunConsumer> readers;
         for(size_t i=1;i<nprocs;i++){
@@ -235,15 +229,13 @@ int main(int argc,char*argv[]) noexcept{
                     MPI_Recv( &batchSize , 1 , MPI_UNSIGNED_LONG , 0 ,0, MPI_COMM_WORLD , MPI_STATUS_IGNORE);
                     if(batchSize==0) break;
                     currFileSize+=batchSize;
-                    //lseek(tmpFd,currFileSize,SEEK_SET);
+                    lseek(tmpFd,currFileSize,SEEK_SET);
                     char* buffer=new char[batchSize];
 
                     MPI_Recv( buffer , batchSize ,MPI_CHAR, 0 , 0 , MPI_COMM_WORLD , MPI_STATUS_IGNORE);
-                    std::vector<Record> recordData= BufferedRecordReader::buildRecordBatch(buffer,batchSize);
-                    numRecords+=recordData.size();
-
-                    #pragma omp task firstprivate(recordData,batchSize) shared(buffer,bufWriter,bytesOffsets,runsOffset,sizes,numRecords)
+                    #pragma omp task firstprivate(batchSize,buffer) shared(bufWriter,bytesOffsets,runsOffset,sizes,numRecords)
                     {
+                        std::vector<Record> recordData= BufferedRecordReader::buildRecordBatch(buffer,batchSize);
                         std::sort(recordData.begin(),recordData.end());
 
                         char* newBuffer=new char[batchSize];
@@ -255,13 +247,11 @@ int main(int argc,char*argv[]) noexcept{
                             newOffset+= Record::recordBytesSize(recordData[j]);
                         }
 
-                        
                         #pragma omp critical
                         {   
                             bytesOffsets.push_back(runsOffset);
                             sizes.push_back(recordData.size());
                             ssize_t written= BufferedRecordWriter::flushBuffer(tmpFd,newBuffer,batchSize,runsOffset);
-                            assert(written==batchSize);
                             delete buffer;
                             delete newBuffer;
                             //currFileOffset+=written;
@@ -281,8 +271,6 @@ int main(int argc,char*argv[]) noexcept{
                 bufWriter.flushBuffer();
                 bufWriter.clear();
 
-                std::cout<< rank << " got " <<numRecords << std::endl;
-                
                 fsync(tmpFd);
                 
                 size_t nWays=bytesOffsets.size();
@@ -319,9 +307,15 @@ int main(int argc,char*argv[]) noexcept{
                         size_t size=outBufWriter.getbufferOffset();
                         
                         char* buffer=outBufWriter.extractBuffer();
-                        MPI_Send( &currBatchSize , 1 , MPI_UNSIGNED_LONG, 0 , 0 , MPI_COMM_WORLD);
-                        MPI_Send(buffer,size,MPI_CHAR,0,0,MPI_COMM_WORLD);
-                        delete buffer;
+
+                        #pragma omp taskwait
+
+                        #pragma omp task firstprivate(buffer,currBatchSize,size)
+                        {   
+                            MPI_Send( &currBatchSize , 1 , MPI_UNSIGNED_LONG, 0 , 0 , MPI_COMM_WORLD);
+                            MPI_Send(buffer,size,MPI_CHAR,0,0,MPI_COMM_WORLD);
+                            delete buffer;
+                        }
                         insertedBytes= outBufWriter.addRecord(r,false);
                         currBatchSize=0;
                     }
@@ -333,6 +327,7 @@ int main(int argc,char*argv[]) noexcept{
                         minPriorityQueue.push({newRecord.key,newRecord.len,newRecord.payload,way});
                     }
                 }
+                #pragma omp taskwait
                 size_t size=outBufWriter.getbufferOffset();
                 if(size>0){
 
@@ -346,10 +341,11 @@ int main(int argc,char*argv[]) noexcept{
                 MPI_Send( &val , 1 , MPI_UNSIGNED_LONG, 0 , 0 , MPI_COMM_WORLD);
 
                 outBufWriter.clear();
+                std::filesystem::remove(tmp);
 
             }
         }
-        std::cout<<rank << " rank is done" << std::endl;
+        //std::cout<<rank << " rank is done" << std::endl;
     }
 
 
@@ -359,9 +355,9 @@ int main(int argc,char*argv[]) noexcept{
     MPI_Barrier( MPI_COMM_WORLD);
     MPI_Finalize();
     if(rank==0){
-        auto end_time = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-        std::cout << "time(ms):" << duration.count() << std::endl;
+        auto end_time = MPI_Wtime();;
+        auto duration = (end_time - start_time);
+        std::cout << "time(ms):" << duration*1000.0 << std::endl;
     }
     return 0;
 }

@@ -72,24 +72,25 @@ int main(int argc,char*argv[]) noexcept{
     {
         #pragma omp single
         {
-            size_t currentOffset=0;
-        
+            
             std::vector<size_t> bytesOffsets;
             std::vector<size_t> sizes;
-        
+            
             BufferedRecordWriter bufWriter(tmpFd,0,(memory_limit/2));
+            
             BufferedRecordReader bufReader(inFd,0,std::max((memory_limit/2)/threads_num,32UL*1024UL*1024UL ));
-        
+            
             std::vector<BufferedRecordReader> bufReaders;
             std::vector<char*> buffers;
             size_t runsOffset=0;
+            size_t currentOffset=0;
+
             while(currentOffset<fileSize){
 
                 auto [newOffset,recordData]=bufReader.getRecords(fileSize);
                 size_t batchSize=newOffset-currentOffset;
                 char* buffer=bufReader.extractBuffer();
                 buffers.push_back(buffer);
-                //bytesOffsets.push_back(currentOffset);
                 
                 currentOffset=newOffset;
                 

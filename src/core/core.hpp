@@ -69,7 +69,11 @@ class BufferedRecordWriter{
         inline ssize_t addRecords(Record* records,const size_t recordsNum,bool autoFlush){
             ssize_t written=0;
             for(size_t i=0;i<recordsNum;++i){
-                written+=addRecord(records[i],autoFlush);
+                ssize_t inserted=addRecord(records[i],autoFlush);
+                if(inserted==-1 && !autoFlush) {
+                    return -1;
+                }
+                written+=inserted;
             }
             return written;
         }
@@ -145,7 +149,7 @@ class BufferedRecordWriter{
                     if (written < 0) {
                         if (errno == EINTR) continue; // Interrupted? retry
                         perror("pwrite");
-                        std::cout<< "error in buffer flushing" << std::endl;
+                        std::cout<< (buffer!=nullptr) << std::endl;
                         return -1;
                     }
                     if(written==0) break;
