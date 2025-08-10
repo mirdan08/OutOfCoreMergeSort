@@ -2,12 +2,11 @@
 
 trials=5
 
-n_records=($((1024*1024*2)) $((32*1024*2)))
-max_payloads=($((32*1024))  $((1024*1024)))
+n_records=($((1024*1024*2)) $((5*1024*2)))
+max_payloads=($((5*1024))  $((1024*1024)))  
 
 num_threads=(1 2 4 8 16 32)
-
-num_nodes=(1 2 4 8)
+num_nodes=(2 4 8)
 
 make cleanall
 make payload_generator
@@ -34,7 +33,7 @@ echo "starting experiments:"
 output_file="$1"
 touch "$output_file"
 echo "" > "$output_file"
-echo "iteration,max_payload_size,records_number,time(ms)" >> "$output_file"
+echo "iteration,num_threads,num_nodes,max_payload_size,records_number,time(ms)" >> "$output_file"
 
 for i in $(seq 1 $trials); do
     for j in $(seq 0  $((n_combs-1))); do
@@ -48,7 +47,7 @@ for i in $(seq 1 $trials); do
                 output=$(mpirun --bind-to none -N $nn ./mpi_multinode -i test_files/file_mp${mp}_nr${nr}.pms -o test_files/file_mp${mp}_nr${nr}_out.pms -t ${nt} -v 0)
                 echo "$output"
                 time_ms=$(echo "$output" | grep 'time(ms):' | awk -F ':' '{print $2}')
-                echo "$i,$nt,$mp,$nr,$time_ms" >> "$output_file"
+                echo "$i,$nt,$nn,$mp,$nr,$time_ms" >> "$output_file"
                 rm test_files/file_mp${mp}_nr${nr}_out.pms
             done
         done

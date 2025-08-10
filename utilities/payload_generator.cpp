@@ -32,6 +32,10 @@ bool printRecordHeaders(const std::string& filename,bool verbose) {
         if(key<pastKey){
             isSorted=false;
         }
+        if(len<8){
+            std::cout<< "len cannot be less than 8" << std::endl;
+            break;
+        }
         pastKey=key;
 
         if (file.gcount() == 0) break; // End of file
