@@ -15,9 +15,26 @@ def load_and_process(csv_file):
     # Drop rows where time(ms) is missing
     df = df.dropna(subset=['time(ms)'])
 
-    # Average over iterations
-    grouped = df.groupby(['iteration', 'max_payload_size', 'records_number', 'n_threads'], as_index=False).mean()
-    averaged = grouped.groupby(['max_payload_size', 'records_number', 'n_threads'], as_index=False)['time(ms)'].mean()
+    # Average over iterations with same parameters
+    grouped = df.groupby(
+        ['iteration', 'max_payload_size', 'records_number', 'n_threads'],
+        as_index=False
+    ).mean()
+
+    # Now, for each unique (max_payload_size, records_number, n_threads),
+    # drop the row with the maximum time, then compute mean and variance
+    def drop_max_and_stats(group):
+        if len(group) > 1:  # only drop max if more than one sample
+            group = group.drop(group['time(ms)'].idxmax())
+        return pd.Series({
+            'time_mean': group['time(ms)'].mean(),
+            'time_var': group['time(ms)'].var(ddof=0)  # population variance
+        })
+
+    averaged = grouped.groupby(
+        ['max_payload_size', 'records_number', 'n_threads'],
+        as_index=False
+    ).apply(drop_max_and_stats)
 
     return averaged
 
@@ -39,7 +56,13 @@ def plot_data(averaged, output_dir, show):
 
         plt.figure(figsize=(8, 6))
         plt.title(f"Records: {records}, Max Payload Size: {payload}")
-        plt.plot(subset['n_threads'], subset['time(ms)'], marker='o')
+        plt.errorbar(
+            subset['n_threads'],
+            subset['time_mean'],
+            yerr=subset['time_var']**0.5,  # standard deviation as error bar
+            fmt='-o',
+            capsize=5
+        )
         plt.xlabel("Number of Threads")
         plt.ylabel("Average Time (ms)")
         plt.xticks(subset['n_threads'])

@@ -5,30 +5,43 @@ import argparse
 import os
 import sys
 
+def drop_max_and_average(df, group_cols):
+    def drop_max(group):
+        if len(group) > 1:
+            group = group.drop(group['time(ms)'].idxmax())
+        return pd.Series({'time(ms)': group['time(ms)'].mean()})
+    return df.groupby(group_cols, as_index=False).apply(drop_max)
+
 def load_and_average(parallel_csv, sequential_csv):
     try:
-        # Load CSVs
+        # Load CSVs and drop rows with missing time
         df_par = pd.read_csv(parallel_csv).dropna(subset=['time(ms)'])
         df_seq = pd.read_csv(sequential_csv).dropna(subset=['time(ms)'])
     except Exception as e:
         print(f"Error reading CSV files: {e}")
         sys.exit(1)
-    # Average parallel times over iterations
-    par_grouped = df_par.groupby(['max_payload_size', 'records_number', 'n_threads'], as_index=False)['time(ms)'].mean()
 
-    # Average sequential times over iterations
-    seq_grouped = df_seq.groupby(['max_payload_size', 'records_number'], as_index=False)['time(ms)'].mean()
-    seq_grouped = seq_grouped.rename(columns={'time(ms)': 'seq_time(ms)'})
-    #print(par_grouped)
-    #print(seq_grouped)
-    # Merge parallel and sequential data on (max_payload_size, records_number)
-    merged = pd.merge(par_grouped, seq_grouped ,on=['max_payload_size', 'records_number'],how='outer')
+    # Average parallel times after dropping max
+    par_grouped = drop_max_and_average(
+        df_par, ['max_payload_size', 'records_number', 'n_threads']
+    )
 
-    par_grouped.groupby(['max_payload_size', 'records_number'])
+    # Average sequential times after dropping max
+    seq_grouped = drop_max_and_average(
+        df_seq, ['max_payload_size', 'records_number']
+    ).rename(columns={'time(ms)': 'seq_time(ms)'})
+
+    # Merge parallel and sequential data
+    merged = pd.merge(
+        par_grouped, seq_grouped,
+        on=['max_payload_size', 'records_number'],
+        how='outer'
+    )
+
     # Compute Speedup and Efficiency
     merged['speedup'] = merged['seq_time(ms)'] / merged['time(ms)']
     merged['efficiency'] = merged['speedup'] / merged['n_threads']
-    #print(merged)
+
     return merged
 
 def plot_curves(merged, output_dir, show):
@@ -39,13 +52,12 @@ def plot_curves(merged, output_dir, show):
         os.makedirs(output_dir)
 
     for _, row in unique_configs.iterrows():
-        print(row)
         payload = row['max_payload_size']
         records = row['records_number']
 
         subset = merged[(merged['max_payload_size'] == payload) &
                         (merged['records_number'] == records)]
-        print(subset)
+
         plt.figure(figsize=(10, 5))
 
         # Plot Speedup
@@ -78,7 +90,7 @@ def plot_curves(merged, output_dir, show):
             plt.close()
 
 def main():
-    parser = argparse.ArgumentParser(description="Compute and plot speedup/efficiency from parallel and sequential runs.")
+    parser = argparse.ArgumentParser(description="Compute and plot speedup/efficiency from parallel and sequential runs (dropping max before averaging).")
     parser.add_argument("parallel_csv", help="CSV file from parallel runs.")
     parser.add_argument("sequential_csv", help="CSV file from sequential runs.")
     parser.add_argument("--output-dir", default="plots", help="Directory to save plots (default: 'plots').")
