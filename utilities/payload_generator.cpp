@@ -12,7 +12,7 @@ struct RecordHeader {
     uint32_t len;
     uint64_t key;
 };
-
+//print record headers from the file
 bool printRecordHeaders(const std::string& filename,bool verbose) {
     std::ifstream file(filename, std::ios::binary);
     if (!file) {
@@ -61,7 +61,9 @@ bool printRecordHeaders(const std::string& filename,bool verbose) {
 
     return isSorted;
 }
-
+/*
+payload generator utility, can generate files and check if they are ordered with correct values for len 
+*/
 int main(int argc,char*argv[]) {
     int opt;
     std::string out_path="";
@@ -130,12 +132,7 @@ int main(int argc,char*argv[]) {
     std::uniform_int_distribution<uint64_t> key_dist(0, UINT64_MAX);
     std::uniform_int_distribution<uint32_t> len_dist(8, payload_max);
     std::uniform_int_distribution<uint8_t> byte_dist(0, 255);
-
-    //std::vector<uint64_t> actual_offsets;
     for (size_t i = 0; i < records_count; ++i) {
-        //uint64_t record_offset = static_cast<uint64_t>(out_file.tellp());
-        //actual_offsets.push_back(record_offset - (offset_table_pos + sizeof(uint64_t) * records_count));
-
         uint64_t key = key_dist(rng);
         uint64_t len = static_cast<uint64_t>(len_dist(rng));
 
@@ -153,11 +150,6 @@ int main(int argc,char*argv[]) {
         for (auto& c : payload) c = static_cast<char>(byte_dist(rng));
         out_file.write(payload.data(), len);
     }
-
-    // Seek back and write the real offset table
-    //out_file.seekp(offset_table_pos, std::ios::beg);
-    //out_file.write(reinterpret_cast<const char*>(actual_offsets.data()), sizeof(uint64_t) * records_count);
-
     out_file.close();
     std::cout << "File '" << out_path << "' written with " << records_count << " records and max payload "<< payload_max <<"."<< std::endl;
     return 0;

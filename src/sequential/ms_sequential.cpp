@@ -76,6 +76,8 @@ int main(int argc,char*argv[]){
         perror("open tmp file");
         return -1;
     }
+
+    //sorting phase
     BufferedRecordWriter bufWriter(tmpFd,0,memory_limit/2);
     BufferedRecordReader bufReader(inFd,0,memory_limit/2);
     while(currentOffset<fileSize){
@@ -90,6 +92,7 @@ int main(int argc,char*argv[]){
     bufWriter.clear();
     bufReader.clear();
 
+    //merging phase
     size_t nWays=bytesOffsets.size();
     std::vector<BufferedRunConsumer> readers;
     for(size_t i=0;i<nWays-1;i++){
@@ -113,6 +116,7 @@ int main(int argc,char*argv[]){
 
     size_t lastKey=0;
     size_t i=0;
+    //merging loop
     while (minPriorityQueue.size()!=0){
         auto [key,len,payload,way]=minPriorityQueue.top();
         minPriorityQueue.pop();
@@ -135,15 +139,11 @@ int main(int argc,char*argv[]){
     }
     
     outBufWriter.flushBuffer();
-    
     outBufWriter.clear();
-    for(size_t i=0;i<nWays;i++){
-    //    readers[i].clear();
-    }
     close(outFd);
     close(inFd);
     close(tmpFd);
-    //std::filesystem::remove("tmp_run");
+    std::filesystem::remove("tmp_run");
     
     
 

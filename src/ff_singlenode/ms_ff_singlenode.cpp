@@ -13,6 +13,10 @@
 #include <fcntl.h>
 #include <filesystem>
 
+
+/*
+Emitter node, load and emit record batch to sort
+*/
 struct RecordBatchEmitter: ff::ff_monode_t<
     int,
     std::tuple<size_t, std::vector<Record>,char*>
@@ -45,6 +49,7 @@ struct RecordBatchEmitter: ff::ff_monode_t<
         }    
 };
 
+//worker node, sort batch of records
 struct RecordBatchSorter: ff::ff_minode_t<
     std::tuple<size_t, RecordVec, char*>,
     std::tuple<size_t, RecordVec, char*>
@@ -55,7 +60,7 @@ struct RecordBatchSorter: ff::ff_minode_t<
         return new std::tuple<size_t, RecordVec, char*>(batchSize,records,buffer);
     }
 };
-
+//collector node, buffers sorted batch of nodes and flushes to disk when full
 struct RecordBatchCollector: ff::ff_minode_t<
     std::tuple<size_t, RecordVec, char*>,
     std::pair<std::vector<size_t>,std::vector<size_t>>
@@ -96,6 +101,7 @@ struct RecordBatchCollector: ff::ff_minode_t<
     }
 };
 
+//merge node,handles reading from the temporary file and schedules flush to the disk when needed
 struct RecordMerger: ff::ff_minode_t<
     std::pair<std::vector<size_t>,std::vector<size_t>>,
     void
@@ -166,7 +172,7 @@ struct RecordMerger: ff::ff_minode_t<
             }
 
         }
-        
+        //wait for the writer to complete previous write
         while(writerBusy.load());
         writerBusy.store(true);
         
@@ -182,7 +188,7 @@ struct RecordMerger: ff::ff_minode_t<
         return EOS;
     }
 };
-
+//batch writer node, it receives from the the RecordMerger the buffers to sort and writes to the disk
 struct RecordBatchWriter: ff::ff_minode_t<
 std::tuple<char*,size_t,size_t>,
 void
@@ -268,7 +274,7 @@ int main(int argc,char*argv[]){
     for(size_t i=0;i<threads_num;i++){
         sorters.push_back(new RecordBatchSorter());
     }
-
+    //sorting stage of the pipeline
     ff::ff_farm runFarm;
     runFarm.add_emitter(recordBatchEmitter);
     runFarm.add_workers(sorters);
@@ -276,7 +282,7 @@ int main(int argc,char*argv[]){
     
     std::atomic<bool> writerBusy(false);
     RecordMerger recordMerger(writerBusy,tmpFd,outFd,fileSize,memory_limit);
-
+    //merging stage of the pipeline
     ff::ff_farm mergeFarm;
 
     mergeFarm.add_emitter(recordMerger);

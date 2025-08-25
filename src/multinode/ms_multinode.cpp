@@ -43,7 +43,7 @@ int main(int argc,char*argv[]) noexcept{
     auto start_time = MPI_Wtime();
     //std::chrono::high_resolution_clock::now();
 
-        std::ifstream in_file(in_filename,std::ifstream::binary | std::ifstream::ate);
+    std::ifstream in_file(in_filename,std::ifstream::binary | std::ifstream::ate);
     size_t fileSize= in_file.tellg();
     in_file.close();
 
@@ -82,6 +82,9 @@ int main(int argc,char*argv[]) noexcept{
     }
 
     if(rank==0){
+        //master rank, emitter+collector
+
+        //emitter section
         size_t currentOffset=0;
         BufferedRecordReader bufReader(inFd,0,memory_limit/2);
         std::vector<char*> buffers;
@@ -98,6 +101,7 @@ int main(int argc,char*argv[]) noexcept{
         size_t chunkIdx=0;
         while(currentOffset<fileSize){
             i=0;
+            //bookeping on the requests, avoid filling memory while buffering and sending
             while(bytesTraveling>=memory_limit && i<reqs.size()){
                 if(reqs[i]!=MPI_REQUEST_NULL) {
                     MPI_Wait(&reqs[i],MPI_STATUS_IGNORE);
@@ -115,8 +119,10 @@ int main(int argc,char*argv[]) noexcept{
             MPI_Request request;
             reqs.push_back(request);
             runsSizes.push_back(batchSize);
+            //send batch of records to worker
             MPI_Send(&batchSize,1,MPI_UNSIGNED_LONG,rankIdx,0,MPI_COMM_WORLD);
             MPI_Isend(buffer,batchSize,MPI_CHAR,rankIdx,0,MPI_COMM_WORLD,&reqs.back());
+
             buffers.push_back(buffer);
             chunkIdx++;
             bytesTraveling+=batchSize;
@@ -126,13 +132,15 @@ int main(int argc,char*argv[]) noexcept{
             if(rankIdx==0) rankIdx++;
         }
         std::vector<MPI_Request> endReqs;
+
+        //signal end of stream to the workers
         size_t val=0;
         for(size_t i=0;i<nprocs;i++){
             endReqs.emplace_back();
             MPI_Send(&val,1,MPI_UNSIGNED_LONG,i,0,MPI_COMM_WORLD);
         }
         bufReader.clear();
-
+        //cleanup aftert waiting for the last messages to arrive
         for(size_t i=0;i<reqs.size();++i){
             MPI_Wait(&reqs[i],MPI_STATUS_IGNORE);
             if(reqs[i]!=MPI_REQUEST_NULL) {
@@ -141,6 +149,7 @@ int main(int argc,char*argv[]) noexcept{
             }
         }
 
+        //collector+merging phase
         std::vector<RankRunConsumer> readers;
         for(size_t i=1;i<nprocs;i++){
             readers.emplace_back(i,0);
@@ -161,7 +170,7 @@ int main(int argc,char*argv[]) noexcept{
         size_t currFileOffset=0;
 
         size_t j=0;
-
+        //merging phase, receive from ranks and merge
         while (minPriorityQueue.size()!=0){
             auto [key,len,payload,way]=minPriorityQueue.top();
             minPriorityQueue.pop();
@@ -197,17 +206,12 @@ int main(int argc,char*argv[]) noexcept{
         }
 
         #pragma omp taskwait
-        //outBufWriter.flushBuffer();
         size_t size=outBufWriter.getbufferOffset();
         char* buffer=outBufWriter.extractBuffer();
         ssize_t written= BufferedRecordWriter::flushBuffer(outFd,buffer,size,currFileOffset);
         delete buffer; 
-
-
-
-
     }else{
-
+        //worker node
         BufferedRecordWriter bufWriter(tmpFd,0,(memory_limit/2));
         std::vector<size_t> bytesOffsets;
         std::vector<size_t> sizes;
@@ -226,6 +230,7 @@ int main(int argc,char*argv[]) noexcept{
             #pragma omp single
             {
                 while(true){
+                    //receiving from the master
                     MPI_Recv( &batchSize , 1 , MPI_UNSIGNED_LONG , 0 ,0, MPI_COMM_WORLD , MPI_STATUS_IGNORE);
                     if(batchSize==0) break;
                     currFileSize+=batchSize;
@@ -233,8 +238,10 @@ int main(int argc,char*argv[]) noexcept{
                     char* buffer=new char[batchSize];
 
                     MPI_Recv( buffer , batchSize ,MPI_CHAR, 0 , 0 , MPI_COMM_WORLD , MPI_STATUS_IGNORE);
+
                     #pragma omp task firstprivate(batchSize,buffer) shared(bufWriter,bytesOffsets,runsOffset,sizes,numRecords)
                     {
+                        //sorting the chunk
                         std::vector<Record> recordData= BufferedRecordReader::buildRecordBatch(buffer,batchSize);
                         std::sort(recordData.begin(),recordData.end());
 
@@ -246,7 +253,7 @@ int main(int argc,char*argv[]) noexcept{
                             std::memcpy(newBuffer+newOffset+Record::headerBytesSize(),recordData[j].payload,recordData[j].len);
                             newOffset+= Record::recordBytesSize(recordData[j]);
                         }
-
+                        //writing to the temporary file
                         #pragma omp critical
                         {   
                             bytesOffsets.push_back(runsOffset);
@@ -254,14 +261,6 @@ int main(int argc,char*argv[]) noexcept{
                             ssize_t written= BufferedRecordWriter::flushBuffer(tmpFd,newBuffer,batchSize,runsOffset);
                             delete buffer;
                             delete newBuffer;
-                            //currFileOffset+=written;
-                            //size_t insertedBytes= bufWriter.addRecords(recordData.data(),recordData.size(),true);
-                            /* if(insertedBytes==-1){
-                                //char* oldBuffer=bufWriter.extractBuffer();
-                                bufWriter.flushBuffer();
-                                bufWriter.addRecords(recordData.data(),recordData.size(),false);
-                            } */
-                            //delete[] buffer;
                             runsOffset+=batchSize;
                         }
                     }
@@ -292,7 +291,7 @@ int main(int argc,char*argv[]) noexcept{
                 size_t currFileOffset=0;
 
                 size_t currBatchSize=0;
-                
+                //merging phase
                 while (minPriorityQueue.size()!=0){
                     auto [key,len,payload,way]=minPriorityQueue.top();
                     minPriorityQueue.pop();
@@ -309,7 +308,7 @@ int main(int argc,char*argv[]) noexcept{
                         char* buffer=outBufWriter.extractBuffer();
 
                         #pragma omp taskwait
-
+                        //like in the singlenode, but send to master instead of write to file
                         #pragma omp task firstprivate(buffer,currBatchSize,size)
                         {   
                             MPI_Send( &currBatchSize , 1 , MPI_UNSIGNED_LONG, 0 , 0 , MPI_COMM_WORLD);
@@ -336,7 +335,7 @@ int main(int argc,char*argv[]) noexcept{
                     MPI_Send(buffer,size,MPI_CHAR,0,0,MPI_COMM_WORLD);
                     delete buffer;
                 }
-
+                //send end of records
                 size_t val=0;
                 MPI_Send( &val , 1 , MPI_UNSIGNED_LONG, 0 , 0 , MPI_COMM_WORLD);
 
@@ -345,7 +344,6 @@ int main(int argc,char*argv[]) noexcept{
 
             }
         }
-        //std::cout<<rank << " rank is done" << std::endl;
     }
 
 

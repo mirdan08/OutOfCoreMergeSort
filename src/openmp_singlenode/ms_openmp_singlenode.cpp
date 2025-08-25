@@ -37,7 +37,7 @@ int main(int argc,char*argv[]) noexcept{
     std::cout<<"starting from " << in_filename << " to "<< out_filename << " with a limit of "<< memory_limit/(1024UL*1024L*1024L)<< "GBs" << " payload max="<< payload_max <<std::endl;
     auto start_time = std::chrono::high_resolution_clock::now();
 
-
+    //create temporary and output files
     std::ifstream in_file(in_filename,std::ifstream::binary | std::ifstream::ate);
     size_t fileSize= in_file.tellg();
     in_file.close();
@@ -68,6 +68,7 @@ int main(int argc,char*argv[]) noexcept{
         return 1;
     }
     omp_set_num_threads(threads_num);
+    //sorting phase
     #pragma omp parallel
     {
         #pragma omp single
@@ -77,7 +78,7 @@ int main(int argc,char*argv[]) noexcept{
             std::vector<size_t> sizes;
             
             BufferedRecordWriter bufWriter(tmpFd,0,(memory_limit/2));
-            
+            //give minimum limit of 32Mb to avoid too small buffers
             BufferedRecordReader bufReader(inFd,0,std::max((memory_limit/2)/threads_num,32UL*1024UL*1024UL ));
             
             std::vector<BufferedRecordReader> bufReaders;
@@ -86,17 +87,18 @@ int main(int argc,char*argv[]) noexcept{
             size_t currentOffset=0;
 
             while(currentOffset<fileSize){
-
+                //load new batch of records
                 auto [newOffset,recordData]=bufReader.getRecords(fileSize);
                 size_t batchSize=newOffset-currentOffset;
                 char* buffer=bufReader.extractBuffer();
                 buffers.push_back(buffer);
                 
                 currentOffset=newOffset;
-                
+                //parallel sorting worker
                 #pragma omp task firstprivate(recordData,buffer,batchSize) shared(bufWriter,bytesOffsets,runsOffset,sizes)
                 {
                     std::sort(recordData.begin(),recordData.end());
+                    //critical section to access to add records to buffer/flush to disk when full
                     #pragma omp critical
                     {
                         bufWriter.addRecords(recordData.data(),recordData.size(),true);
@@ -116,15 +118,13 @@ int main(int argc,char*argv[]) noexcept{
 
             fsync(tmpFd);
             lseek(tmpFd, 0, SEEK_SET);
-            
+            //merging phase
             size_t nWays=bytesOffsets.size();
             std::vector<BufferedRunConsumer> readers;
-
             for(size_t i=0;i<nWays-1;i++){
                 readers.emplace_back(tmpFd,bytesOffsets[i],memory_limit/(nWays+1),bytesOffsets[i+1]);
             }
             readers.emplace_back(tmpFd,bytesOffsets[nWays-1],memory_limit/(nWays+1),fileSize);
-            
             std::priority_queue<HeapNodeRecord, std::vector<HeapNodeRecord>, std::greater<HeapNodeRecord>> minPriorityQueue;
             size_t outWrittenBytes=0;
             BufferedRecordWriter outBufWriter(outFd,0,memory_limit/(nWays+1));
@@ -135,7 +135,7 @@ int main(int argc,char*argv[]) noexcept{
                 minPriorityQueue.push({record.key,record.len,record.payload,i});
             }
             size_t currFileOffset=0;
-
+            //merging loop
             while (minPriorityQueue.size()!=0){
                 auto [key,len,payload,way]=minPriorityQueue.top();
                 minPriorityQueue.pop();
@@ -149,9 +149,10 @@ int main(int argc,char*argv[]) noexcept{
                     //bufer is full, flush it and make a new one
                     size_t size=outBufWriter.getbufferOffset();
                     char* buffer=outBufWriter.extractBuffer();
-
+                    //await for previous writing completion
                     #pragma omp taskwait
-
+                    
+                    //schedule new write
                     #pragma omp task shared(currFileOffset,outFd) firstprivate(buffer,size)
                     {
                         ssize_t written= BufferedRecordWriter::flushBuffer(outFd,buffer,size,currFileOffset);
@@ -173,15 +174,12 @@ int main(int argc,char*argv[]) noexcept{
             }
 
             #pragma omp taskwait
-            //outBufWriter.flushBuffer();
+
             size_t size=outBufWriter.getbufferOffset();
             char* buffer=outBufWriter.extractBuffer();
             ssize_t written= BufferedRecordWriter::flushBuffer(outFd,buffer,size,currFileOffset);
             delete buffer;
             outBufWriter.clear();
-            for(size_t i=0;i<nWays;i++){
-                //    readers[i].clear();
-            }
             std::filesystem::remove("tmp_run");
             close(outFd);
             close(inFd);

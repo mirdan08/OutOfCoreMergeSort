@@ -35,10 +35,10 @@ struct Record {
         return headerBytesSize()+instance.len;
     }
 };
-
+//used for sorting in the merging phase
 struct HeapNodeRecord {
-    uint64_t key;          // Key for sorting
-    uint32_t len;            // Position in data of this element
+    uint64_t key;
+    uint32_t len;
     char* payload;
     size_t way;
     // This operator makes the priority_queue a min-heap by key
@@ -47,6 +47,9 @@ struct HeapNodeRecord {
     }
 };
 
+/*
+Buffers the records and writes to the file
+*/
 class BufferedRecordWriter{
     size_t bufferOffset=0;
     size_t fileOffset;
@@ -65,7 +68,9 @@ class BufferedRecordWriter{
             bufferSize=maxBufferSize;
             setFile(fd,fileOffset);
         }
-
+        /*
+        add a series of records, if autoFlush Enabled then flush autoamtically else just stop and let the user handle it
+        */ 
         inline ssize_t addRecords(Record* records,const size_t recordsNum,bool autoFlush){
             ssize_t written=0;
             for(size_t i=0;i<recordsNum;++i){
@@ -77,7 +82,9 @@ class BufferedRecordWriter{
             }
             return written;
         }
-
+        /*
+        Add a single record and flush it, if autoFlush=false return -1 instead
+        */
         inline ssize_t addRecord(const Record& record,bool autoFlush){
             if(Record::recordBytesSize(record)+bufferOffset>=bufferSize && autoFlush) flushBuffer();
             if(Record::recordBytesSize(record)+bufferOffset>=bufferSize && !autoFlush) return -1;
@@ -113,14 +120,16 @@ class BufferedRecordWriter{
         inline ssize_t flushBuffer(){
             return flushBuffer(this->buffer);
         }
-
+        //extract tbe current buffer and allocate a new one
         inline char* extractBuffer(){
             char* oldBuffer=buffer;
             buffer=new char[maxBufferSize];
             bufferOffset=0;
             return oldBuffer;
         }
-
+        /*
+        Flush any kind of buffer to disk starting from the offset and file descriptor received
+        */
         static inline ssize_t flushBuffer(int outFd,char* buffer,size_t bufferSize,size_t fileOffset){
             ssize_t totalWritten = 0;
             while (totalWritten < bufferSize) {
@@ -138,7 +147,7 @@ class BufferedRecordWriter{
             }
             return totalWritten;
         }
-
+        //flush a buffer according the the current instance offset in the file
         inline ssize_t flushBuffer(char* buffer){
             ssize_t totalWritten = 0;
             while (totalWritten < bufferOffset) {
@@ -147,7 +156,7 @@ class BufferedRecordWriter{
                     bufferOffset - totalWritten, 
                     fileOffset + totalWritten);
                     if (written < 0) {
-                        if (errno == EINTR) continue; // Interrupted? retry
+                        if (errno == EINTR) continue;
                         perror("pwrite");
                         std::cout<< (buffer!=nullptr) << std::endl;
                         return -1;
@@ -181,7 +190,9 @@ class BufferedRecordWriter{
         }
 
 };
-
+/*
+Returns batch of records according to the specified buffer size
+*/
 class BufferedRecordReader{
     uint64_t bufferOffset=0;
     uint64_t fileOffset;
@@ -201,7 +212,7 @@ class BufferedRecordReader{
             maxBufferSize=maxBufferSize;
             setFile(fd,fileOffset);
         }
-        
+        //build a batch of records from a buffer
         static std::vector<Record> buildRecordBatch(char* buffer,size_t batchSize){
             size_t offset=0;
             std::vector<Record> records;
@@ -228,7 +239,7 @@ class BufferedRecordReader{
         inline uint64_t getFileOffset(){
             return fileOffset;
         }
-
+        //extract records without going over an imposed limit in the file or overflowing the buffer
         inline std::pair<size_t,std::vector<Record>>getRecords(uint64_t limit){
             uint64_t bufferSize=std::min(maxBufferSize,limit-fileOffset);
             uint64_t totalRead=0;
@@ -288,9 +299,6 @@ class BufferedRecordReader{
 
             return std::pair(fileOffset,std::move(result));
         }
-        /*
-        Replaces the buffer and returns the old one
-        */
         inline char* extractBuffer(){
             char *oldBuffer=buffer;
             buffer=new char[maxBufferSize];
@@ -323,6 +331,7 @@ class BufferedRecordReader{
         }
 };
 
+//wrapper for BufferRecordReader, useful to read records in the merging phase
 class BufferedRunConsumer{
     BufferedRecordReader reader;
     std::vector<Record> records;
@@ -349,7 +358,9 @@ class BufferedRunConsumer{
             reader.clear();
         }
 };
-
+/*
+Used to read batch of records from a MPI rank
+*/
 class RankRunConsumer{
     std::vector<Record> records;
     size_t currentPos=0;
