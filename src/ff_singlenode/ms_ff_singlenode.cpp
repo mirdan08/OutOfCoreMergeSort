@@ -17,6 +17,9 @@
 /*
 Emitter node, load and emit record batch to sort
 */
+
+using RecordVec=std::vector<Record>;
+
 struct RecordBatchEmitter: ff::ff_monode_t<
     int,
     std::tuple<size_t, std::vector<Record>,char*>

@@ -34,7 +34,6 @@ int main(int argc,char*argv[]) noexcept{
         std::cout << "please specify the output file path" << std::endl;
         return 1;
     }
-    std::cout<<"starting from " << in_filename << " to "<< out_filename << " with a limit of "<< memory_limit/(1024UL*1024L*1024L)<< "GBs" << " payload max="<< payload_max <<std::endl;
     auto start_time = std::chrono::high_resolution_clock::now();
 
     //create temporary and output files
