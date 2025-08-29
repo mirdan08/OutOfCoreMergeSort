@@ -36,20 +36,21 @@ touch "$output_file"
 echo "" > "$output_file"
 echo "iteration,num_threads,num_nodes,max_payload_size,records_number,time(ms)" >> "$output_file"
 
+make cleanall
+make mpi_multinode
+
 for i in $(seq 1 $trials); do
     for j in $(seq 0  $((n_combs-1))); do
         mp=${max_payloads[$j]}
         nr=${n_records[$j]}
-        make cleanall
-        make mpi_multinode RPAYLOAD_MAX=$mp
         for nn in "${num_nodes[@]}"; do
             for nt in "${num_threads[@]}"; do
                 echo "iteration=$i max_payload=$mp records_number=$nr  num_threads=$nt num_nodes=$nn"
-                output=$(srun --mpi=pmix --bind-to none -N $nn  --time=00:30:00 --mpi=pmix $pwd/mpi_multinode -i test_files/file_mp${mp}_nr${nr}.pms -o test_files/file_mp${mp}_nr${nr}_out.pms -t ${nt} -v 0)
+		output=$(srun --mpi=pmix --cpu-bind=none -N $nn  --time=00:30:00 --mpi=pmix $(pwd)/mpi_multinode -i test_files/file_mp${mp}_nr${nr}.pms -o test_files/file_mp${mp}_nr${nr}_out.pms -t ${nt} -v 0)
                 echo "$output"
                 time_ms=$(echo "$output" | grep 'time(ms):' | awk -F ':' '{print $2}')
                 echo "$i,$nt,$nn,$mp,$nr,$time_ms" >> "$output_file"
-                rm $pwd/test_files/file_mp${mp}_nr${nr}_out.pms
+		rm $(pwd)/test_files/file_mp${mp}_nr${nr}_out.pms
             done
         done
     done

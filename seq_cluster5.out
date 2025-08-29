@@ -1,4 +1,4 @@
-
+\
 iteration,max_payload_size,records_number,time(ms)
 1,122880,524288,220877
 1,524288,122880,1376952

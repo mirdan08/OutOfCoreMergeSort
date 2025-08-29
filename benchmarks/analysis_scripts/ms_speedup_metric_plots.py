@@ -57,6 +57,9 @@ def plot_curves(merged, output_dir, show):
 
         subset = merged[(merged['max_payload_size'] == payload) &
                         (merged['records_number'] == records)]
+        print(subset)
+        
+
 
         plt.figure(figsize=(10, 5))
 

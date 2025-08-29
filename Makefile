@@ -3,7 +3,7 @@ MPICXX     = mpicxx
 
 CXXFLAGS= -std=c++20 -fopenmp
 
-INCLUDES   = -Iinclude/fastflow/ -Isrc/ -Isrc/utils/
+INCLUDES   = -Iinclude/fastflow/ -Isrc/ -Isrc/utils/ -I/opt/ohpc/pub/mpi/openmpi5-gnu12/5.0.3/include
 LDFLAGS    = -pthread -Wall -Wextra
 OPTFLAGS   = -ffast-math -O3 -ftree-vectorize -DNDEBUG
 
@@ -44,6 +44,7 @@ openmp_singlenode: $(OMP_OBJ) $(CORE_OBJ) $(UTILS_OBJ)
 
 mpi_multinode: $(MPI_OBJ) $(CORE_OBJ) $(UTILS_OBJ)
 	$(MPICXX) $(CXXFLAGS) -DRPAYLOAD_MAX=$(RPAYLOAD_MAX) $(INCLUDES) $(OPTFLAGS) -o $@ $^ -fopenmp $(LDFLAGS) 
+
 payload_generator:utilities/payload_generator.cpp 
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(OPTFLAGS) -o utilities/$@ $^ $(LDFLAGS)
 

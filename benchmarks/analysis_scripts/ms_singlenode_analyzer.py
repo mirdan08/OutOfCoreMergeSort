@@ -56,13 +56,7 @@ def plot_data(averaged, output_dir, show):
 
         plt.figure(figsize=(8, 6))
         plt.title(f"Records: {records}, Max Payload Size: {payload}")
-        plt.errorbar(
-            subset['n_threads'],
-            subset['time_mean'],
-            yerr=subset['time_var']**0.5,  # standard deviation as error bar
-            fmt='-o',
-            capsize=5
-        )
+        plt.plot(subset['n_threads'],subset['time_mean'])
         plt.xlabel("Number of Threads")
         plt.ylabel("Average Time (ms)")
         plt.xticks(subset['n_threads'])
