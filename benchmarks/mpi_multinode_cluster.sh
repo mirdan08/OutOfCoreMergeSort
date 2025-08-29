@@ -50,7 +50,7 @@ for i in $(seq 1 $trials); do
                 echo "$output"
                 time_ms=$(echo "$output" | grep 'time(ms):' | awk -F ':' '{print $2}')
                 echo "$i,$nt,$nn,$mp,$nr,$time_ms" >> "$output_file"
-		rm $(pwd)/test_files/file_mp${mp}_nr${nr}_out.pms
+		        rm $(pwd)/test_files/file_mp${mp}_nr${nr}_out.pms
             done
         done
     done
