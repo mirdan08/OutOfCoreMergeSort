@@ -2,8 +2,8 @@
 
 trials=5
 
-n_records=(   $((1024*1024*2)) $((1024*1024*2)) $((1024*1024*2)) $((2.5*1024*2))   $((5*1024*2))     $((10*1024*2)))
-max_payloads=($((2.5*1024))    $((5*1024))      $((10*1024))     $((1024*1024))    $((1024*1024))    $((1024*1024)))  
+n_records=(   $((1024*1024*2)) $((1024*1024*2)) $((1024*1024*2)) $(((3/2)*1024*2))   $((5*1024*2))     $((10*1024*2)))
+max_payloads=($(((3/2)*1024))    $((5*1024))      $((10*1024))     $((1024*1024))    $((1024*1024))    $((1024*1024)))  
 num_nodes=(    2               4                8                2                 4                 8             )
 
 
@@ -46,11 +46,11 @@ for i in $(seq 1 $trials); do
         nn=${num_nodes[$j]}
         for nt in "${num_threads[@]}"; do
             echo "iteration=$i max_payload=$mp records_number=$nr  num_threads=$nt num_nodes=$nn"
-            output=$(srun --mpi=pmix --cpu-bind=none -N $nn  --time=00:30:00 --mpi=pmix $pwd/mpi_multinode -i test_files/file_mp${mp}_nr${nr}.pms -o test_files/file_mp${mp}_nr${nr}_out.pms -t ${nt} -v 0)
+            output=$(srun --mpi=pmix --cpu-bind=none -N $nn  --time=00:30:00 --mpi=pmix $(pwd)/mpi_multinode -i test_files/file_mp${mp}_nr${nr}.pms -o test_files/file_mp${mp}_nr${nr}_out.pms -t ${nt} -v 0)
             echo "$output"
             time_ms=$(echo "$output" | grep 'time(ms):' | awk -F ':' '{print $2}')
             echo "$i,$nt,$nn,$mp,$nr,$time_ms" >> "$output_file"
-            rm $pwd/test_files/file_mp${mp}_nr${nr}_out.pms
+            rm $(pwd)/test_files/file_mp${mp}_nr${nr}_out.pms
         done
     done
 done

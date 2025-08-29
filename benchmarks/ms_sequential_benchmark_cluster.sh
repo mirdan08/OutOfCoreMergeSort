@@ -43,7 +43,6 @@ for i in $(seq 1 $trials); do
             echo "iteration=$i max_payload=$mp records_number=$nr memory_limit=$m"
             output=$(srun --time=00:20:00  ./ms_sequential -i test_files/file_mp${mp}_nr${nr}.pms -o test_files/file_mp${mp}_nr${nr}_out.pms -m $m -v 0 )
             echo "$output"
-            echo "$(./utilities/payload_generator -d test_files/file_mp${mp}_nr${nr}_out.pms)"
             time_ms=$(echo "$output" | grep 'time(ms):' | awk -F ':' '{print $2}')
             echo "$i,$mp,$nr,$m,$time_ms" >> "$output_file"
             rm test_files/file_mp${mp}_nr${nr}_out.pms
